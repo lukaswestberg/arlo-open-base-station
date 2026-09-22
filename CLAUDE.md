@@ -27,14 +27,18 @@ This project provides a complete replacement for Arlo's commercial base station 
 
 ### What's in the Live Deployment (Runtime)
 ```
-/opt/arlo-cam-api/                  # RUNNING Python backend (arlo.service)
-├── config.yaml                     # LIVE config with real secrets
-├── arlo.db                         # LIVE database
-└── venv/                           # Python virtualenv
+~/arlo/                             # BASE_DIR from install.conf (default ~/arlo)
+├── app/                            # RUNNING Python backend (arlo.service)
+│   ├── config.yaml                 # LIVE config with real secrets
+│   ├── arlo.db                     # LIVE database
+│   └── venv/                       # Python virtualenv
+├── viewer/                         # RUNNING Node.js frontend (arlo-viewer.service)
+├── recordings/                     # LIVE video storage (NOT in repo)
+├── logs/arlo-service.log           # Backend log
+└── .env                            # Viewer secrets (AUTH_PASSWORD, ...)
 
-~/arlo-viewer/                      # RUNNING Node.js frontend (arlo-viewer.service)
-
-~/arlo-recordings/                  # LIVE video storage (NOT in repo)
+/etc/hostapd/hostapd.conf           # Camera AP (contains the WiFi PSK)
+/etc/arlo/dnsmasq.conf              # Camera DHCP (arlo-dhcp.service, DHCP only, port=0)
 ```
 
 ### What is NOT in the Repository
@@ -45,16 +49,16 @@ This project provides a complete replacement for Arlo's commercial base station 
 - Python `venv/`
 
 ### Development Workflow
-1. Make changes in the LIVE DEPLOYMENT (`/opt/arlo-cam-api/` or `~/arlo-viewer/`)
+1. Make changes in the repo, then redeploy with `sudo scripts/install.sh --yes` (idempotent; keeps config.yaml, arlo.db, .env and the WiFi PSK). Hot-fixes can be made in `~/arlo/app` or `~/arlo/viewer` directly
 2. Test by restarting services
-3. Once working, copy changes to the repo (`~/arlo-open-base-station/`)
+3. If you hot-fixed the live copy, copy the change back to the repo
 4. Commit and push to GitHub
 
 ### Fresh Install (New Machine)
 1. Clone the repo
-2. Run `scripts/install.sh` - creates live deployment from repo templates
-3. Edit live config with real values
-4. Services run from live deployment, not repo
+2. `sudo scripts/install.sh` - packages, AP, DHCP, services, health checks (no reboot)
+3. `sudo arlo-pair` and press the camera's sync button
+4. Add camera names under `CameraAliases` in `~/arlo/app/config.yaml`
 
 ## Directory Structure
 
@@ -79,27 +83,22 @@ arlo-open-base-station/
 │   ├── security-bore-tunnel.service  # Bore tunnel for viewer (optional)
 │   └── ntfy-bore-tunnel.service      # Bore tunnel for ntfy (optional)
 ├── scripts/
-│   └── install.sh             # Main installation script
+│   ├── install.sh             # One-shot, idempotent installer
+│   ├── arlo-pair              # WPS pairing helper (-> /usr/local/bin)
+│   └── arlo-status            # Health overview (-> /usr/local/bin)
 └── docs/                      # Additional documentation
 ```
 
 ## Installation
 
-1. Copy the config template:
-   ```bash
-   cp config/install.conf.example config/install.conf
-   ```
+```bash
+cp config/install.conf.example config/install.conf   # optional, defaults work
+sudo scripts/install.sh
+sudo arlo-pair
+```
 
-2. Edit `config/install.conf` with your values (username, WiFi interface, passwords, etc.)
-
-3. Run the installer as root:
-   ```bash
-   sudo scripts/install.sh
-   ```
-
-4. Configure your WiFi interface IP (instructions shown after install)
-
-5. Reboot
+The installer must never touch the firewall, the system dnsmasq (`/etc/dnsmasq.conf`,
+`/etc/dnsmasq.d`) or port 53 (hosts commonly run Docker/Pi-hole/Tailscale). See docs/INSTALLATION.md.
 
 ## Key Components
 
@@ -113,9 +112,10 @@ The core backend that handles:
 
 **Important Files:**
 - `server.py` - Main entry point, starts Flask and ArloSocket
-- `arlo/registration.py` - Camera registration protocol
-- `arlo/stream_manager.py` - Video recording management
-- `api/routes.py` - REST API endpoints
+- `arlo/messages.py` - Register sets sent to cameras (`REGISTER_SET_INITIAL_ULTRA` for VMC5040)
+- `helpers/motion_recorder.py` - GStreamer motion recording (ffmpeg can't open the Ultra's RTSP)
+- `helpers/connectivity_checker.py` - Online status via `iw station dump` / ARP
+- `api/api.py` - REST API endpoints (no `/api` prefix)
 
 ### arlo-viewer (Node.js)
 Web interface for:
@@ -137,11 +137,11 @@ Internet/LAN (ethernet)
        │
    arlo-base (your local machine)
        │
-   WiFi AP (NETGEAR99)
+   WiFi AP (hostapd on this host, or external AP)
        │
    ┌───┴───┐
 Camera1  Camera2
-(.102)   (.103)
+(.1xx)   (.1xx)   # AP_SUBNET, default 172.14.1.0/24
 ```
 
 **Ports:**
@@ -149,17 +149,18 @@ Camera1  Camera2
 - 5000/TCP - REST API (Flask)
 - 3003/TCP - Web viewer (Node.js)
 - 554/TCP - RTSP streaming
-- 67/UDP - DHCP (dnsmasq)
-- 53/UDP - DNS (dnsmasq)
+- 67/UDP - DHCP (arlo-dhcp.service, private dnsmasq)
 
 ## Configuration
 
-Main configuration is in `config/config.yaml`:
+Runtime configuration is in `~/arlo/app/config.yaml` (template: `config/config.yaml.example`):
 
 ```yaml
 # Recording settings
 RecordOnMotionAlert: true
-RecordingBasePath: "/home/user/arlo-recordings/"
+RecordingBasePath: "/home/user/arlo/recordings/"   # trailing slash required
+MotionClipSeconds: 10
+MotionRtspPort: 554   # 555 = 4K HEVC on Ultra
 MotionRecordingTimeout: 120
 
 # Push notifications (ntfy)
@@ -176,13 +177,13 @@ CameraAliases:
 ### Logs
 ```bash
 # Main arlo service
-tail -f /tmp/arlo-service.log
+tail -f ~/arlo/logs/arlo-service.log
 
 # Viewer service
 journalctl -u arlo-viewer -f
 
 # DHCP leases
-cat /var/lib/misc/dnsmasq.leases
+cat /var/lib/arlo-dhcp/dnsmasq.leases
 ```
 
 ## Common Tasks
@@ -190,10 +191,11 @@ cat /var/lib/misc/dnsmasq.leases
 ### Check Camera Status
 ```bash
 # View connected cameras
-curl http://localhost:5000/api/cameras/status
+curl http://localhost:5000/cameras/status
+arlo-status
 
 # Check DHCP leases
-cat /var/lib/misc/dnsmasq.leases
+cat /var/lib/arlo-dhcp/dnsmasq.leases
 
 # Check WiFi clients
 iw dev YOUR_INTERFACE station dump
@@ -202,10 +204,11 @@ iw dev YOUR_INTERFACE station dump
 ### Manual Recording
 ```bash
 # Start recording from camera
-curl -X POST http://localhost:5000/api/cameras/SERIAL/record
+curl -X POST http://localhost:5000/camera/SERIAL/record
 
-# Stop recording
-curl -X POST http://localhost:5000/api/cameras/SERIAL/stop
+# Arm / disarm (camera must be awake)
+curl -X POST http://localhost:5000/camera/SERIAL/arm
+curl -X POST http://localhost:5000/camera/SERIAL/disarm
 ```
 
 ### Troubleshooting
@@ -217,8 +220,8 @@ systemctl status arlo-viewer.service
 # Check ports
 ss -tlnp | grep -E '4000|5000|3003'
 
-# Check firewall
-sudo iptables -L INPUT -n -v
+# Check AP / DHCP
+journalctl -u hostapd -u arlo-dhcp -n 50
 ```
 
 ## GStreamer Streaming

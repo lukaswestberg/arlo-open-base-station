@@ -12,9 +12,9 @@ This is a working system, not a polished product. Installation requires configur
 
 | Component | Tested Model |
 |-----------|-------------|
-| Camera | Arlo Pro (VMC4030) |
-| WiFi AP | TP-Link Omada EAP225 |
-| Compute | Surface Book 3 running Ubuntu 24.04 |
+| Camera | Arlo Pro (VMC4030), Arlo Ultra (VMC5040) |
+| WiFi AP | TP-Link Omada EAP225; Orange Pi 5 Pro onboard WiFi (brcmfmac) via hostapd |
+| Compute | Surface Book 3 (Ubuntu 24.04); Orange Pi 5 Pro (Ubuntu 22.04, arm64) |
 
 Other Arlo cameras that use the same registration protocol may work but have not been tested.
 
@@ -49,29 +49,27 @@ Other Arlo cameras that use the same registration protocol may work but have not
 
 - **Compute**: Any Linux machine (Raspberry Pi 4, old laptop, mini PC)
 - **WiFi AP**: Enterprise access point recommended (TP-Link Omada EAP225)
-- **Cameras**: Arlo Pro cameras (VMC4030 tested)
+- **Cameras**: Arlo Pro (VMC4030) and Arlo Ultra (VMC5040) tested
 
 > **Important**: WiFi hardware choice is critical. Consumer USB adapters often drop sleeping camera connections, causing battery drain. See [docs/WIFI-HARDWARE.md](docs/WIFI-HARDWARE.md) for details.
 
 ## Getting Started
 
 ```bash
-# Clone the repository
-git clone https://github.com/frandallfarmer/arlo-open-base-station.git
+git clone <your fork> arlo-open-base-station
 cd arlo-open-base-station
 
-# Copy and edit configuration
+# Optional: all settings have working defaults
 cp config/install.conf.example config/install.conf
-nano config/install.conf
 
-# Run installer
-sudo scripts/install.sh
-
-# Reboot
-sudo reboot
+sudo scripts/install.sh      # packages, WiFi AP, DHCP, services, health checks
+sudo arlo-pair               # then hold the camera's SYNC button ~2 s
 ```
 
-See [docs/INSTALLATION.md](docs/INSTALLATION.md) for complete setup instructions, including external infrastructure requirements (VPS, domain, bore tunnels for remote access).
+The installer is safe to re-run and does not touch your firewall, port 53 or
+`/etc/dnsmasq.conf`. See [docs/INSTALLATION.md](docs/INSTALLATION.md) for
+details and for remote access (VPS, domain, bore tunnels). For what changed
+to support the Arlo Ultra, see [docs/ULTRA-FIXES.md](docs/ULTRA-FIXES.md).
 
 ## Architecture
 
@@ -100,27 +98,13 @@ See [docs/INSTALLATION.md](docs/INSTALLATION.md) for complete setup instructions
 - [Dependencies](docs/DEPENDENCIES.md) - Required packages and external services
 - [WiFi Hardware](docs/WIFI-HARDWARE.md) - Critical hardware compatibility info
 - [System Architecture](docs/ARLO-SYSTEM-V1.0.md) - Technical deep-dive
+- [Arlo Ultra Fixes](docs/ULTRA-FIXES.md) - Bugs fixed while bringing up a VMC5040
 
 ## Configuration
 
-All configuration is done through `config/install.conf`:
-
-```bash
-# Required
-USERNAME="your_username"
-WIFI_INTERFACE="wlan0"
-WIFI_SSID="NETGEAR99"
-WIFI_PASSWORD="your_password"
-
-# Camera names
-CAMERA_SERIAL_1="ABC123"
-CAMERA_NAME_1="Front Door"
-
-# Push notifications (optional)
-NTFY_ENABLED="true"
-NTFY_URL="https://ntfy.sh"
-NTFY_TOPIC="my-arlo-alerts"
-```
+Install-time settings live in `config/install.conf` (interface, SSID, subnet,
+viewer password, retention, and so on). Runtime settings (camera names, clip
+length, notifications) live in `~/arlo/app/config.yaml`.
 
 ## Credits
 

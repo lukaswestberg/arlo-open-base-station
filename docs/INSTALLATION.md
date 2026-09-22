@@ -57,8 +57,8 @@ This project is a complete replacement for:
 See [WIFI-HARDWARE.md](WIFI-HARDWARE.md) for the full technical investigation.
 
 ### Cameras
-- Arlo cameras (VMC4030 tested)
-- Custom firmware capability required
+- Arlo Pro VMC4030 (upstream) and Arlo Ultra VMC5040 (firmware 58.0.15) tested
+- No custom firmware needed: cameras pair to your own AP over WPS
 
 ## External Infrastructure (Optional)
 
@@ -97,122 +97,116 @@ If you only need access from your home network:
 
 ## Quick Start
 
+Tested on an Orange Pi 5 Pro (Ubuntu 22.04, arm64) using its onboard WiFi as
+the camera access point. Any Debian/Ubuntu machine with an AP-capable radio
+that is **not** its uplink should work.
+
 ```bash
-# 1. Clone the repository
-git clone https://github.com/frandallfarmer/arlo-open-base-station.git
+git clone <your fork> arlo-open-base-station
 cd arlo-open-base-station
 
-# 2. Copy and edit the configuration
+# Optional: every setting has a working default
 cp config/install.conf.example config/install.conf
-nano config/install.conf  # Fill in your values
+nano config/install.conf
 
-# 3. Run the installer
-sudo scripts/install.sh
+sudo scripts/install.sh          # add --yes to skip the prompt
 
-# 4. Configure network interface (see below)
-
-# 5. Reboot
-sudo reboot
+sudo arlo-pair                   # then hold the camera's SYNC button ~2 s
 ```
+
+No reboot is needed. The installer finishes with health checks and prints the
+viewer URL and login.
+
+## What the Installer Does
+
+| Step | Detail |
+|------|--------|
+| Preflight | Refuses to use a WiFi interface that carries the default route or any SSH session. Validates SSID/password characters. Warns if ports 4000/5000/3003 are taken or Python is newer than 3.10 |
+| Packages | hostapd, dnsmasq-base (binary only, no system dnsmasq service), iw, GStreamer (good/bad plugins), ffmpeg (thumbnails only), python3-venv, nodejs/npm |
+| Layout | Everything under `BASE_DIR` (default `~/arlo`): `app/` (backend, venv, config.yaml, arlo.db), `viewer/`, `recordings/`, `logs/`, `.env`. Services run as your login user |
+| WiFi AP | Writes `/etc/hostapd/hostapd.conf` (WPA2-CCMP, WMM, WPS push-button). The AP address comes from a hostapd systemd drop-in, not netplan. The radio is marked unmanaged in NetworkManager **without restarting NM**, so SSH is not interrupted |
+| DHCP | A private dnsmasq instance, `arlo-dhcp.service` with `/etc/arlo/dnsmasq.conf`: DHCP only (`port=0`), tied to hostapd. `/etc/dnsmasq.conf`, `/etc/dnsmasq.d` and any Pi-hole are left alone |
+| Services | `arlo.service` and `arlo-viewer.service`, plus optional bore tunnels. The backend log is rotated weekly |
+| Helpers | `arlo-pair` (WPS pairing and waits for registration) and `arlo-status` |
+
+**What it does not touch:** the firewall, the system dnsmasq/Pi-hole, port 53
+and IP forwarding. Cameras need no internet access. If your host firewall
+defaults to DROP on the camera interface, allow inbound TCP 4000 and UDP 67
+there. Also allow the RTP/RTCP replies to recordings: the host pulls RTSP from
+camera:554 over UDP, so allow inbound UDP from the camera subnet, or at least
+ESTABLISHED/RELATED. Allow TCP 3003 (and 5000 if wanted) from your LAN.
+
+**Re-running** redeploys the code and keeps `config.yaml`, `arlo.db`, `.env`
+and the AP's SSID and passphrase (unless you set them explicitly), so paired
+cameras stay paired. If an older install lives elsewhere (e.g. `/opt/arlo-cam-api`),
+point `BASE_DIR` at it or its database and camera names will not carry over.
+A hand-built `/etc/dnsmasq.d/arlo.conf` is migrated to `arlo-dhcp.service`.
 
 ## Configuration Reference
 
-Edit `config/install.conf` before running the installer:
+`config/install.conf` (all optional):
 
-| Variable | Description | Example |
-|----------|-------------|---------|
-| `USERNAME` | Your Linux username | `your_username` |
-| `WIFI_INTERFACE` | WiFi adapter for AP | `wlan0`, `wlx00c0cab955c4` |
-| `ETH_INTERFACE` | Ethernet for SSH/internet | `eth0`, `enp0s25` |
-| `WIFI_SSID` | Network name for cameras | `NETGEAR99` |
-| `WIFI_PASSWORD` | WPA2 password | `yourpassword` |
-| `RECORDINGS_PATH` | Where to store videos | `/home/user/arlo-recordings` |
-| `CAMERA_SERIAL_1` | Camera serial number | `YOUR_SERIAL` |
-| `CAMERA_NAME_1` | Friendly name | `Front Door` |
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `ARLO_USER` | user who ran sudo | Account the services run as |
+| `BASE_DIR` | `~/arlo` | Install root |
+| `WIFI_INTERFACE` | `wlan0` | AP radio (`iw dev` to list) |
+| `WIFI_SSID` | current, else `ARLO_VMB` | Camera network name. Changing it later means re-pairing |
+| `WIFI_PASSWORD` | current, else generated | WPA2 passphrase, alphanumeric recommended |
+| `WIFI_COUNTRY` | `US` | Regulatory domain for both AP and cameras |
+| `WIFI_CHANNEL` | `6` | 2.4 GHz channel |
+| `AP_SUBNET` | `172.14.1` | Camera subnet. Base station is `.1`, cameras `.100-.199` |
+| `VIEWER_PASSWORD` | generated | Web viewer login |
+| `RETENTION_DAYS` | `7` | Recording retention |
+| `MOTION_CLIP_SECONDS` | `10` | Clip length per motion event |
+| `NTFY_*` | disabled | Push notifications via [ntfy](https://ntfy.sh) |
+| `BORE_*` | disabled | Remote access via [bore](https://github.com/ekzhang/bore) |
 
-### Optional: Push Notifications
+Runtime settings live in `BASE_DIR/app/config.yaml` (see
+`config/config.yaml.example`). Restart `arlo` after editing it. Settings
+that are sent to the camera, such as the country code and PIR, only apply when
+the camera re-registers. It does that on its own every few hours; to force
+it, pull the battery for ~2 s.
 
-For mobile alerts via [ntfy](https://ntfy.sh):
-
-| Variable | Description |
-|----------|-------------|
-| `NTFY_ENABLED` | `true` or `false` |
-| `NTFY_URL` | `https://ntfy.sh` or self-hosted |
-| `NTFY_TOPIC` | Your notification topic |
-
-### Optional: Remote Access
-
-For exposing the viewer via [bore](https://github.com/ekzhang/bore) tunnel:
-
-| Variable | Description |
-|----------|-------------|
-| `BORE_REMOTE_SERVER` | Your server running bore |
-| `BORE_VIEWER_PORT` | Remote port for viewer |
-| `BORE_NTFY_PORT` | Remote port for ntfy |
-
-## Post-Installation: Network Setup
-
-After the installer completes, configure your WiFi interface IP address.
-
-### Ubuntu 18.04+ (netplan)
-
-Create `/etc/netplan/03-arlo-ap.yaml`:
-
-```yaml
-network:
-  version: 2
-  wifis:
-    YOUR_WIFI_INTERFACE:
-      dhcp4: false
-      addresses:
-        - 172.14.0.1/24
-```
-
-Apply with: `sudo netplan apply`
-
-### Other Systems
+## Pairing a Camera
 
 ```bash
-sudo ip link set YOUR_WIFI_INTERFACE up
-sudo ip addr add 172.14.0.1/24 dev YOUR_WIFI_INTERFACE
+sudo arlo-pair
 ```
+
+1. Unplug any real Arlo base station.
+2. Keep the camera within a few metres of the host.
+3. Run `arlo-pair`, then hold the camera's **SYNC** button ~2 s until it
+   blinks blue.
+4. The camera associates, finishes WPS, reconnects with WPA2, gets a DHCP
+   lease and registers. This usually takes under 20 s. `arlo-pair` prints the
+   serial, so you can add a friendly name under `CameraAliases`.
+
+A hostapd line like `IEEE 802.1X: authentication failed - EAP type: 0` right
+after the first association is the normal end of WPS, not an error.
+
+Pairing to your own AP removes the camera from Arlo's ecosystem. Going back to
+an Arlo base station requires a factory reset.
 
 ## Verification
 
-After reboot, verify the installation:
-
 ```bash
-# Check services are running
-systemctl status arlo arlo-viewer
-
-# Check WiFi AP is broadcasting
-iw dev YOUR_WIFI_INTERFACE info
-
-# Check DHCP is ready
-systemctl status dnsmasq
-
-# View the web interface
-curl http://localhost:3003
+arlo-status                          # services, WiFi clients, leases, cameras
+curl http://localhost:5000/cameras/status
 ```
-
-## Camera Setup
-
-1. Power on your Arlo camera
-2. Camera should connect to your WiFi network (SSID from config)
-3. Check DHCP lease: `cat /var/lib/misc/dnsmasq.leases`
-4. Check registration: `curl http://localhost:5000/api/cameras/status`
 
 ## Troubleshooting
 
-See [TROUBLESHOOTING.md](TROUBLESHOOTING.md) or check logs:
-
 ```bash
-# Main service log
-tail -f /tmp/arlo-service.log
-
-# Viewer service log
+tail -f ~/arlo/logs/arlo-service.log
+journalctl -u hostapd -u arlo-dhcp -f
 journalctl -u arlo-viewer -f
-
-# DHCP/DNS log
-journalctl -u dnsmasq -f
 ```
+
+| Symptom | Fix |
+|---------|-----|
+| hostapd: `Could not configure driver mode` / `nl80211 driver initialization failed` | Something else holds the radio (wpa_supplicant, NetworkManager), or a P2P device exists: find the `p2p-dev-wlan0` wdev id in `iw dev`, then `sudo iw wdev <id> del && sudo systemctl restart hostapd` |
+| Camera associates but never registers | Check that `arlo` is listening on :4000 and that the camera got a lease with gateway `AP_SUBNET.1` |
+| Camera shows offline | The connectivity checker runs every 5 min using `iw station dump`, with the ARP cache as fallback |
+| Motion alerts but no clip | Check `recordings/gst-*.log`. Recording uses GStreamer because ffmpeg cannot open the Ultra's RTSP stream |
+| No motion alerts at all | The camera must re-register after an upgrade so it receives the PIR settings. Pull its battery for ~2 s |

@@ -47,20 +47,22 @@ bore server --min-port 8080 --max-port 8090
 
 | Package | Purpose |
 |---------|---------|
-| `hostapd` | WiFi access point daemon |
-| `dnsmasq` | DHCP and DNS server for camera network |
-| `netfilter-persistent` | Persistent iptables firewall rules |
-| `iptables-persistent` | Saves/restores firewall on boot |
-| `python3-venv` | Python virtual environment support |
-| `python3-full` | Complete Python 3 installation |
-| `ffmpeg` | Video processing (thumbnails, format conversion) |
-| `nodejs` | Runtime for arlo-viewer web server |
-| `npm` | Node.js package manager |
-| `gstreamer1.0-tools` | GStreamer CLI tools (gst-launch-1.0) |
+| `hostapd` | WiFi access point daemon (WPS pairing) |
+| `dnsmasq-base` | DHCP for the camera network, run as the private `arlo-dhcp.service` (DNS disabled, `port=0`). The `dnsmasq` system service is not needed |
+| `iw`, `rfkill`, `iproute2` | Radio control, connectivity checks, AP address |
+| `psmisc` | `fuser`, used by the viewer unit to free port 3003 |
+| `rsync`, `openssl`, `curl`, `logrotate` | Installer deploys and secrets, `arlo-status` |
+| `python3-venv`, `python3-dev`, `build-essential` | Virtualenv; some pinned pip packages build from source |
+| `ffmpeg` | Thumbnails from finished recordings (not used for RTSP) |
+| `nodejs`, `npm` | arlo-viewer. The distro version is fine (tested with Node 12 and 16) |
+| `gstreamer1.0-tools` | `gst-launch-1.0`, used for motion recording |
 | `gstreamer1.0-plugins-base` | Core GStreamer plugins |
-| `gstreamer1.0-plugins-good` | Quality GStreamer plugins (RTSP, HLS) |
-| `gstreamer1.0-plugins-bad` | Additional GStreamer plugins |
-| `python3-gst-1.0` | Python bindings for GStreamer |
+| `gstreamer1.0-plugins-good` | `rtspsrc`, `rtph264depay`, `matroskamux` |
+| `gstreamer1.0-plugins-bad` | `h264parse`, `h265parse`, HLS |
+| `python3-gst-1.0` | Python bindings for live-stream helper (runs on system python3) |
+
+The installer no longer installs `netfilter-persistent`/`iptables-persistent`
+and does not write firewall rules.
 
 ### Optional
 
