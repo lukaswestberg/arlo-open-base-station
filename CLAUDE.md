@@ -213,6 +213,10 @@ Things that cost real time to rediscover:
   drives `apply_light_policy()` in `arlo/messages.py`, which only writes keys
   already present in the chosen template - that is what keeps non-Ultra
   register sets untouched.
+- **The gallery must never render a `<video>` per recording.** Thumbnails are
+  lazy `<img>`s and cards are paged; a `<video>` is built only on Play. The
+  earlier grid of `<video preload="metadata">` froze the tab outright once the
+  directory held a few thousand clips.
 - **`RecordingBasePath` needs its trailing slash** - it is concatenated, not joined.
 - Known issues that are deliberately *not* fixed are listed in docs/ULTRA-FIXES.md.
   Check there before chasing one.

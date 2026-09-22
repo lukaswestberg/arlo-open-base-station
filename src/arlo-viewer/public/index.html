@@ -66,6 +66,43 @@
             display: block;
         }
 
+        /* Cards show the thumbnail ffmpeg already wrote; the <video> is only
+           built when Play is pressed. A grid of <video preload="metadata">
+           gave the browser a media element per recording, which froze the tab
+           once the directory held a few thousand clips. */
+        .thumb {
+            width: 100%;
+            height: 100%;
+            display: block;
+            object-fit: cover;
+            cursor: pointer;
+            background: #000;
+        }
+
+        .thumb-missing {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 100%;
+            height: 100%;
+            color: #555;
+            font-size: 2em;
+            cursor: pointer;
+        }
+
+        .load-more {
+            display: block;
+            margin: 25px auto 0;
+            max-width: 300px;
+            padding: 12px;
+            background: #2196F3;
+            color: white;
+        }
+
+        .load-more:hover {
+            background: #0b7dda;
+        }
+
         .card-info {
             padding: 15px;
         }
@@ -181,6 +218,7 @@
         </div>
         <div class="stats" id="stats">Loading...</div>
         <div class="recordings-grid" id="recordingsGrid"></div>
+        <button class="load-more" id="loadMore" style="display:none;" onclick="renderMore()"></button>
     </div>
 
     <button class="refresh-btn" onclick="loadRecordings()" title="Refresh">↻</button>
@@ -188,6 +226,11 @@
     <script>
         let recordings = [];
         let cameraStatus = {};  // Map of serial -> {online, friendly_name}
+
+        // Cards are appended in batches. Every card is cheap (one lazy <img>),
+        // but a few thousand of them at once is not.
+        const PAGE_SIZE = 60;
+        let rendered = 0;
 
         async function loadCameraStatus() {
             try {
@@ -233,19 +276,42 @@
                     return;
                 }
 
-                const totalSize = recordings.reduce((sum, r) => sum + r.size, 0);
-                const sizeGB = (totalSize / (1024 * 1024 * 1024)).toFixed(2);
-                stats.textContent = `${recordings.length} recordings • ${sizeGB} GB total`;
+                updateStats();
 
-                grid.innerHTML = recordings.map(recording => createRecordingCard(recording)).join('');
+                // A refresh keeps however much the user had scrolled open.
+                const target = Math.max(PAGE_SIZE, rendered);
+                grid.innerHTML = '';
+                rendered = 0;
+                renderMore(target);
             } catch (error) {
                 grid.innerHTML = '<div class="empty"><h2>Error loading recordings</h2><p>' + error.message + '</p></div>';
+                document.getElementById('loadMore').style.display = 'none';
             }
+        }
+
+        function renderMore(count) {
+            const grid = document.getElementById('recordingsGrid');
+            const next = recordings.slice(rendered, rendered + (count || PAGE_SIZE));
+            grid.insertAdjacentHTML('beforeend', next.map(createRecordingCard).join(''));
+            rendered += next.length;
+
+            const btn = document.getElementById('loadMore');
+            const left = recordings.length - rendered;
+            btn.style.display = left > 0 ? 'block' : 'none';
+            btn.textContent = `Show ${Math.min(left, PAGE_SIZE)} more (${left} remaining)`;
+        }
+
+        function updateStats() {
+            const totalSize = recordings.reduce((sum, r) => sum + r.size, 0);
+            const sizeGB = (totalSize / (1024 * 1024 * 1024)).toFixed(2);
+            document.getElementById('stats').textContent =
+                `${recordings.length} recordings • ${sizeGB} GB total`;
         }
 
         function createRecordingCard(recording) {
             const sizeKB = (recording.size / 1024).toFixed(0);
             const videoId = recording.filename.replace(/[^a-zA-Z0-9]/g, '_');
+            const thumbnail = recording.filename.replace(/\.(mp4|mkv)$/, '.jpg');
             const serial = getSerialFromFilename(recording.filename);
             const camInfo = serial ? cameraStatus[serial] : null;
             const isOnline = camInfo && camInfo.online;
@@ -257,11 +323,11 @@
 
             return `
                 <div class="recording-card" id="card_${videoId}">
-                    <div class="video-container">
-                        <video id="video_${videoId}" controls preload="metadata">
-                            <source src="/api/video/${recording.filename}" type="video/mp4">
-                            Your browser does not support the video tag.
-                        </video>
+                    <div class="video-container" id="player_${videoId}">
+                        <img class="thumb" loading="lazy" alt="${recording.timestamp}"
+                             src="/api/thumbnail/${thumbnail}"
+                             onclick="playVideo('${videoId}')"
+                             onerror="thumbFailed(this, '${videoId}')">
                     </div>
                     <div class="card-info">
                         <div class="timestamp">${recording.timestamp}</div>
@@ -279,8 +345,32 @@
             `;
         }
 
+        // ffmpeg's thumbnail step can fail on its own; the card still works.
+        function thumbFailed(img, videoId) {
+            const box = document.createElement('div');
+            box.className = 'thumb-missing';
+            box.textContent = '\u25b6';
+            box.onclick = () => playVideo(videoId);
+            img.replaceWith(box);
+        }
+
+        // First press swaps the thumbnail for a real player; after that it is
+        // an ordinary play/pause toggle.
         function playVideo(videoId) {
-            const video = document.getElementById('video_' + videoId);
+            let video = document.getElementById('video_' + videoId);
+            if (!video) {
+                const recording = recordings.find(
+                    r => r.filename.replace(/[^a-zA-Z0-9]/g, '_') === videoId);
+                if (!recording) return;
+                const type = recording.filename.endsWith('.mkv')
+                    ? 'video/x-matroska' : 'video/mp4';
+                document.getElementById('player_' + videoId).innerHTML = `
+                    <video id="video_${videoId}" controls autoplay preload="metadata">
+                        <source src="/api/video/${recording.filename}" type="${type}">
+                        Your browser does not support the video tag.
+                    </video>`;
+                return;
+            }
             if (video.paused) {
                 video.play();
             } else {
@@ -311,9 +401,8 @@
 
                     // Update stats
                     recordings = recordings.filter(r => r.filename !== filename);
-                    const totalSize = recordings.reduce((sum, r) => sum + r.size, 0);
-                    const sizeGB = (totalSize / (1024 * 1024 * 1024)).toFixed(2);
-                    document.getElementById('stats').textContent = `${recordings.length} recordings • ${sizeGB} GB total`;
+                    rendered--;
+                    updateStats();
 
                     if (recordings.length === 0) {
                         setTimeout(() => loadRecordings(), 400);
@@ -333,8 +422,12 @@
         // Load recordings on page load
         loadRecordings();
 
-        // Auto-refresh every 60 seconds
-        setInterval(loadRecordings, 60000);
+        // Auto-refresh every 60 seconds. A refresh rebuilds the grid, so skip
+        // it while something is playing rather than yanking the clip away.
+        setInterval(() => {
+            const playing = [...document.querySelectorAll('video')].some(v => !v.paused);
+            if (!playing) loadRecordings();
+        }, 60000);
     </script>
 </body>
 </html>

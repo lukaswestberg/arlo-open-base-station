@@ -66,6 +66,16 @@ affect every camera model, not just the Ultra.
 15. **UDP cost frames and ended sessions early.** Over UDP the camera sent EOS
     at 47 s; over TCP it was still streaming past 75 s. `MotionRtspProtocols`
     now defaults to `tcp`.
+16. **The gallery froze on a large recordings directory.** Every recording was
+    rendered as a `<video preload="metadata">`, all of them at once: 3000 clips
+    produced 36,016 DOM nodes and 3000 media elements, and a single render
+    locked the renderer for over 45 s. Cards now show the thumbnail ffmpeg
+    already writes (`loading="lazy"`), 60 at a time behind a "Show more"
+    button, and the `<video>` is built only when Play is pressed. Same
+    directory after the change: 677 DOM nodes, no media elements, ~90 ms to
+    render. The retention sweep also moved off the request path onto an hourly
+    timer, which took `/api/recordings` from ~27 ms to ~16 ms at 3000 files -
+    real, but never the thing that made the page slow.
 13. **The recorder slept the whole clip length regardless.** The camera usually
     ends the stream early (one observed clip: 47.7 s of a 60 s request), and
     `-e` has already finalised the container by then, but the thread kept
@@ -82,7 +92,6 @@ affect every camera model, not just the Ultra.
 - `gst_hls_stream.py` hardcodes `rtph264depay`, so 4K (port 555, HEVC) live
   view would need an H.265 pipeline. Live view has not been tested on the
   Ultra.
-- Viewer retention cleanup only runs when `/api/recordings` is requested.
 - `SpotlightEnabled: false` is not proven to be absolute. Every key it writes
   is named `*Alert`, so they plausibly govern only what the lamp does on a
   motion alert, not the camera's own ambient-light behaviour. If the spotlight

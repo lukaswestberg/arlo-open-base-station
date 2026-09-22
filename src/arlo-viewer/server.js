@@ -199,6 +199,7 @@ app.post('/api/camera/:serial/disarm', (req, res) => {
 // API: List all recordings
 // Cleanup old recordings (older than 7 days)
 const RETENTION_DAYS = parseInt(process.env.RETENTION_DAYS, 10) || 7;
+const CLEANUP_INTERVAL_MS = 60 * 60 * 1000;
 
 function cleanupOldRecordings(callback) {
     const maxAge = Date.now() - (RETENTION_DAYS * 24 * 60 * 60 * 1000);
@@ -246,62 +247,72 @@ function cleanupOldRecordings(callback) {
     });
 }
 
-app.get('/api/recordings', (req, res) => {
-    // First cleanup old recordings, then return the list
+// The sweep runs on a timer, never on a request: it stats every file in the
+// directory, and doing that inline made the gallery slower with each recording.
+let cleanupRunning = false;
+
+function runCleanup() {
+    if (cleanupRunning) return;   // a slow sweep must not stack on the next tick
+    cleanupRunning = true;
     cleanupOldRecordings((err, deletedCount) => {
-        if (deletedCount > 0) {
+        cleanupRunning = false;
+        if (err) {
+            console.error(`[CLEANUP] Failed: ${err.message}`);
+        } else if (deletedCount > 0) {
             console.log(`[CLEANUP] Removed ${deletedCount} recordings older than ${RETENTION_DAYS} days`);
         }
+    });
+}
 
-        fs.readdir(RECORDINGS_DIR, (err, files) => {
-            if (err) {
-                return res.status(500).json({ error: 'Failed to read recordings directory' });
-            }
+app.get('/api/recordings', (req, res) => {
+    fs.readdir(RECORDINGS_DIR, (err, files) => {
+        if (err) {
+            return res.status(500).json({ error: 'Failed to read recordings directory' });
+        }
 
-            // Filter for video files and get file stats
-            const mp4Files = files.filter(f => f.endsWith('.mp4') || f.endsWith('.mkv'));
-            const recordings = [];
+        // Filter for video files and get file stats
+        const mp4Files = files.filter(f => f.endsWith('.mp4') || f.endsWith('.mkv'));
+        const recordings = [];
 
-            let pending = mp4Files.length;
-            if (pending === 0) {
-                return res.json([]);
-            }
+        let pending = mp4Files.length;
+        if (pending === 0) {
+            return res.json([]);
+        }
 
-            mp4Files.forEach(file => {
-                const filePath = path.join(RECORDINGS_DIR, file);
-                fs.stat(filePath, (err, stats) => {
-                    if (!err) {
-                        // Parse timestamp from filename: arlo-SERIAL-20251219-140803.mp4 or .mkv
-                        const match = file.match(/arlo-([^-]+)-(\d{8})-(\d{6})\.(mp4|mkv)/);
-                        let timestamp = null;
-                        let cameraSerial = null;
-                        if (match) {
-                            cameraSerial = match[1]; // e.g. YOUR_SERIAL
-                            const date = match[2]; // 20251219
-                            const time = match[3]; // 140803
-                            // Format: 2025-12-19 14:08:03
-                            timestamp = `${date.substr(0,4)}-${date.substr(4,2)}-${date.substr(6,2)} ${time.substr(0,2)}:${time.substr(2,2)}:${time.substr(4,2)}`;
-                        }
-
-                        // Use friendly name from aliases if available
-                        const cameraName = cameraSerial ? (CAMERA_ALIASES[cameraSerial] || cameraSerial) : 'unknown';
-
-                        recordings.push({
-                            filename: file,
-                            size: stats.size,
-                            timestamp: timestamp || new Date(stats.mtime).toISOString(),
-                            mtime: stats.mtime,
-                            camera: cameraName
-                        });
+        mp4Files.forEach(file => {
+            const filePath = path.join(RECORDINGS_DIR, file);
+            fs.stat(filePath, (err, stats) => {
+                if (!err) {
+                    // Parse timestamp from filename: arlo-SERIAL-20251219-140803.mp4 or .mkv
+                    const match = file.match(/arlo-([^-]+)-(\d{8})-(\d{6})\.(mp4|mkv)/);
+                    let timestamp = null;
+                    let cameraSerial = null;
+                    if (match) {
+                        cameraSerial = match[1]; // e.g. YOUR_SERIAL
+                        const date = match[2]; // 20251219
+                        const time = match[3]; // 140803
+                        // Format: 2025-12-19 14:08:03
+                        timestamp = `${date.substr(0,4)}-${date.substr(4,2)}-${date.substr(6,2)} ${time.substr(0,2)}:${time.substr(2,2)}:${time.substr(4,2)}`;
                     }
 
-                    pending--;
-                    if (pending === 0) {
-                        // Sort by timestamp descending (newest first)
-                        recordings.sort((a, b) => new Date(b.mtime) - new Date(a.mtime));
-                        res.json(recordings);
-                    }
-                });
+                    // Use friendly name from aliases if available
+                    const cameraName = cameraSerial ? (CAMERA_ALIASES[cameraSerial] || cameraSerial) : 'unknown';
+
+                    recordings.push({
+                        filename: file,
+                        size: stats.size,
+                        timestamp: timestamp || new Date(stats.mtime).toISOString(),
+                        mtime: stats.mtime,
+                        camera: cameraName
+                    });
+                }
+
+                pending--;
+                if (pending === 0) {
+                    // Sort by timestamp descending (newest first)
+                    recordings.sort((a, b) => new Date(b.mtime) - new Date(a.mtime));
+                    res.json(recordings);
+                }
             });
         });
     });
@@ -532,4 +543,6 @@ app.get('/api/stream/:serial/:file', (req, res) => {
 
 app.listen(PORT, () => {
     console.log(`Arlo Viewer running on http://localhost:${PORT}`);
+    runCleanup();
+    setInterval(runCleanup, CLEANUP_INTERVAL_MS).unref();
 });
