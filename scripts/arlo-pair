@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+# Pair an Arlo camera to this base station over WPS push-button.
+# Installed to /usr/local/bin by scripts/install.sh (placeholders filled in).
+#
+# The camera learns the SSID/passphrase from hostapd, gets a DHCP lease, then
+# connects to TCP 4000 on its gateway and registers. You never need the old
+# Arlo base station's credentials. Note: this unpairs the camera from Arlo;
+# going back to an Arlo base station needs a factory reset.
+
+set -uo pipefail
+
+IFACE="${ARLO_AP_INTERFACE:-@WIFI_INTERFACE@}"
+LOG="@LOG_FILE@"
+TIMEOUT=180
+
+[ "$EUID" -eq 0 ] || { echo "Run as root: sudo arlo-pair"; exit 1; }
+systemctl is-active --quiet hostapd || { echo "hostapd is not running (systemctl status hostapd)"; exit 1; }
+systemctl is-active --quiet arlo    || { echo "arlo service is not running (systemctl status arlo)"; exit 1; }
+
+start_lines="$(wc -l < "$LOG" 2>/dev/null || echo 0)"
+# Cameras seen before, so a paired camera re-registering during the window
+# is not mistaken for the new one.
+known="$(grep -o 'Registration from [^ ]*' "$LOG" 2>/dev/null | awk '{print $3}' | sort -u)"
+
+echo "Opening a WPS window on $IFACE (~2 minutes)..."
+out="$(hostapd_cli -i "$IFACE" wps_pbc 2>&1)"
+[ "$out" = "OK" ] || { echo "hostapd_cli wps_pbc failed: $out"; exit 1; }
+
+cat <<'EOF'
+
+  Now, with the camera within a few metres of this machine:
+    1. Unplug any real Arlo base station.
+    2. Hold the camera's SYNC button ~2 s until the LED blinks blue.
+
+  An "EAP ... authentication failed" line in hostapd's log right after the
+  first association is the normal end of the WPS exchange, not an error.
+
+Waiting for the camera to register (up to 3 minutes, Ctrl-C to stop)...
+EOF
+
+deadline=$(( $(date +%s) + TIMEOUT ))
+while [ "$(date +%s)" -lt "$deadline" ]; do
+    serial=""
+    for s in $(tail -n +"$((start_lines + 1))" "$LOG" 2>/dev/null \
+               | grep -o 'Registration from [^ ]*' | awk '{print $3}'); do
+        echo "$known" | grep -qxF "$s" || { serial="$s"; break; }
+    done
+    if [ -n "$serial" ]; then
+        echo ""
+        echo "Paired: $serial"
+        echo ""
+        echo "Give it a name by adding it under CameraAliases in @APP_DIR@/config.yaml:"
+        echo "  CameraAliases:"
+        echo "    $serial: \"Front Door\""
+        echo "then: sudo systemctl restart arlo arlo-viewer"
+        exit 0
+    fi
+    sleep 2
+done
+
+echo ""
+echo "No registration seen. Check:"
+echo "  journalctl -u hostapd -u arlo-dhcp -n 40     # did it associate / get a lease?"
+echo "  tail -n 40 $LOG"
+echo "(Re-pairing a camera this base station already knows? Its registration"
+echo " is not reported here; look for its serial in the log.)"
+exit 1

@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# Quick health view of the Arlo base station.
+# Installed to /usr/local/bin by scripts/install.sh (placeholders filled in).
+
+IFACE="${ARLO_AP_INTERFACE:-@WIFI_INTERFACE@}"
+LOG="@LOG_FILE@"
+
+echo "== Services"
+for s in hostapd arlo-dhcp arlo arlo-viewer; do
+    printf '  %-12s %s\n' "$s" "$(systemctl is-active "$s")"
+done
+
+echo "== Associated WiFi stations on $IFACE"
+if st="$(iw dev "$IFACE" station dump 2>/dev/null)"; then
+    echo "$st" | awk '/^Station/{print "  " $2}'
+else
+    echo "  (iw station dump failed)"
+fi
+
+echo "== DHCP leases"
+awk '{print "  " $3 "  " $2 "  " $4}' /var/lib/arlo-dhcp/dnsmasq.leases 2>/dev/null \
+    || echo "  (no lease file yet)"
+
+echo "== Cameras (API)"
+if api="$(curl -sf --max-time 3 http://localhost:5000/cameras/status)"; then
+    echo "$api" | python3 -m json.tool 2>/dev/null | sed 's/^/  /'
+else
+    echo "  API not responding"
+fi
+
+echo "== Last log lines"
+tail -n 8 "$LOG" 2>/dev/null | sed 's/^/  /'

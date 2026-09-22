@@ -1,14 +1,16 @@
+# Reference copy: scripts/install.sh generates this with real paths.
 [Unit]
 Description=Arlo Recording Viewer
-After=network.target
+After=network.target arlo.service
 
 [Service]
 Type=simple
-# Change to your username
 User=YOUR_USERNAME
-# Change to where you installed arlo-viewer
-WorkingDirectory=/home/YOUR_USERNAME/arlo-viewer
-ExecStartPre=/usr/bin/bash -c "/usr/bin/fuser -k 3003/tcp || true"
+Group=YOUR_USERNAME
+WorkingDirectory=/home/YOUR_USERNAME/arlo/viewer
+# RECORDINGS_DIR, ARLO_CONFIG, RETENTION_DAYS, AUTH_PASSWORD, AUTH_SECRET
+EnvironmentFile=/home/YOUR_USERNAME/arlo/.env
+ExecStartPre=/bin/sh -c "/usr/bin/fuser -k 3003/tcp || true"
 ExecStart=/usr/bin/node server.js
 Restart=always
 RestartSec=10

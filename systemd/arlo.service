@@ -1,13 +1,18 @@
+# Reference copy: scripts/install.sh generates this with real paths.
 [Unit]
-Description=Arlo Control Service
-After=multi-user.target
-StartLimitIntervalSec=
+Description=Arlo Control Service (arlo-cam-api)
+After=network-online.target hostapd.service
+Wants=network-online.target hostapd.service
 
 [Service]
-WorkingDirectory=/opt/arlo-cam-api/
-User=arlo
-Type=idle
-ExecStart=/opt/arlo-cam-api/venv/bin/python3 /opt/arlo-cam-api/server.py
+Type=simple
+User=YOUR_USERNAME
+Group=YOUR_USERNAME
+WorkingDirectory=/home/YOUR_USERNAME/arlo/app
+Environment=ARLO_LOG_FILE=/home/YOUR_USERNAME/arlo/logs/arlo-service.log
+Environment=ARLO_AP_INTERFACE=wlan0
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/home/YOUR_USERNAME/arlo/app/venv/bin/python3 /home/YOUR_USERNAME/arlo/app/server.py
 Restart=on-failure
 RestartSec=5s
 

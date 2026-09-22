@@ -1,66 +1,72 @@
 # Arlo Open Base Station - Installation Configuration
-# Copy this file and fill in your values before running scripts/install.sh
+#
+#   cp config/install.conf.example config/install.conf
+#   sudo scripts/install.sh
+#
+# Every value below has a working default. Blank secrets are generated on the
+# first run and reused on every re-run, so re-running the installer never
+# forces you to re-pair cameras or change your viewer login.
 
-# ===== USER CONFIGURATION =====
-# Your Linux username (for file paths and service ownership)
-USERNAME="your_username"
+# ===== USER / LAYOUT =====
+# Login user the services run as. Blank = the user who ran sudo.
+ARLO_USER=""
 
-# ===== NETWORK CONFIGURATION =====
-# WiFi interface for the access point (run 'ip link' to find yours)
-# Examples: wlp3s0, wlan0, wlx00c0cab955c4
+# Everything lives under here: app/ viewer/ recordings/ logs/ .env
+# Blank = /home/$ARLO_USER/arlo
+BASE_DIR=""
+
+# ===== CAMERA WIFI ACCESS POINT =====
+# Radio that hosts the camera network (run 'iw dev' to list). Must support AP
+# mode and must NOT be the interface you are reaching this machine through.
 WIFI_INTERFACE="wlan0"
 
-# Ethernet interface (for SSH access and internet)
-# Examples: eth0, enp0s25, eno1
-ETH_INTERFACE="eth0"
+# The cameras learn the SSID/password over WPS at pairing time, so you can
+# choose anything. Changing either later means re-pairing every camera.
+# Avoid obvious names (neighbours can see it). Do not hide the SSID: WPS
+# discovery needs it broadcast. Max 32 chars, no | & " ' or backslash.
+# Blank = keep the current AP's SSID, or "ARLO_VMB" on a first install.
+WIFI_SSID=""
 
-# ===== ACCESS POINT CONFIGURATION =====
-# WiFi network name that cameras will connect to
-WIFI_SSID="NETGEAR99"
+# WPA2 passphrase. Blank = keep the current one, or generate 24 random
+# alphanumerics on a first install (recommended; some camera supplicants
+# mishandle symbols).
+WIFI_PASSWORD=""
 
-# WiFi password (WPA2)
-WIFI_PASSWORD="changeme"
-
-# WiFi country code (for regulatory compliance)
+# Regulatory domain for the AP and for the cameras' own radios.
 WIFI_COUNTRY="US"
 
-# ===== RECORDING CONFIGURATION =====
-# Where to store video recordings
-RECORDINGS_PATH="/home/${USERNAME}/arlo-recordings"
+# 2.4 GHz channel (1, 6 or 11). Arlo cameras are 2.4 GHz only.
+WIFI_CHANNEL="6"
 
-# How long to record after motion (seconds)
-MOTION_TIMEOUT="120"
+# First three octets of the camera subnet. The base station takes .1, cameras
+# get .100-.199 on infinite leases. Pick something unused on your LAN.
+AP_SUBNET="172.14.1"
 
-# ===== CAMERA CONFIGURATION =====
-# Camera serial numbers and friendly names
-# Add more CAMERA_SERIAL_X and CAMERA_NAME_X pairs as needed
-CAMERA_SERIAL_1=""
-CAMERA_NAME_1="Front Door"
+# ===== WEB VIEWER =====
+# Login password for http://<host>:3003. Blank = generate one (printed at
+# the end of the install and stored in $BASE_DIR/.env). Only used on the
+# first install; afterwards edit AUTH_PASSWORD in .env.
+VIEWER_PASSWORD=""
 
-CAMERA_SERIAL_2=""
-CAMERA_NAME_2="Back Yard"
+# Days of recordings to keep.
+RETENTION_DAYS="7"
 
-# ===== NOTIFICATION CONFIGURATION (Optional) =====
-# Set NTFY_ENABLED="false" to disable push notifications
-NTFY_ENABLED="true"
+# ===== RECORDING =====
+# Seconds recorded per motion event.
+MOTION_CLIP_SECONDS="10"
+
+# ===== NOTIFICATIONS (optional) =====
+NTFY_ENABLED="false"
 NTFY_URL="https://ntfy.sh"
 NTFY_TOPIC="your-arlo-alerts"
 NTFY_PRIORITY="high"
-
-# For thumbnail previews in notifications (requires public URL)
+# For thumbnail previews / tap-through in notifications (needs a public URL)
 NTFY_THUMBNAIL_URL=""
 NTFY_CLICK_URL=""
 
-# ===== REMOTE ACCESS CONFIGURATION (Optional) =====
-# For bore tunnel to expose viewer publicly
-# Leave empty to skip bore tunnel setup
+# ===== REMOTE ACCESS (optional) =====
+# bore tunnel to expose the viewer publicly. Blank = skip.
+# Requires /usr/local/bin/bore (https://github.com/ekzhang/bore).
 BORE_REMOTE_SERVER=""
 BORE_VIEWER_PORT="8084"
 BORE_NTFY_PORT="8085"
-
-# ===== INSTALLATION PATHS =====
-# Where to install arlo-cam-api (usually don't change)
-INSTALL_DIR="/opt/arlo-cam-api"
-
-# System user for running the service
-SERVICE_USER="arlo"

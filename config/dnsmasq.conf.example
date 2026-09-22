@@ -1,16 +1,17 @@
-# dnsmasq configuration for Arlo base station
-# Provides DHCP and DNS services on the arlo network interface
-
+# Arlo camera DHCP. scripts/install.sh writes this to /etc/arlo/dnsmasq.conf
+# and runs it as its own instance (arlo-dhcp.service, from dnsmasq-base), so a
+# system dnsmasq or Pi-hole is never touched. port=0 disables DNS entirely.
+# Cameras need neither DNS nor internet.
+port=0
 bind-interfaces
 except-interface=lo
+interface=YOUR_WIFI_INTERFACE
 
-# Replace with your WiFi adapter interface name
-# Use `ip link` to find your interface
-interface=YOUR_INTERFACE_NAME
-
-# DHCP range for connected cameras (172.14.0.100-199)
-dhcp-range=172.14.0.100,172.14.0.199,255.255.255.0,infinite
-
-# Domain and gateway DNS entry
-domain=arlo
-address=/gateway.arlo/172.14.0.1
+# Infinite leases: camera IPs are unique keys in arlo.db.
+dhcp-range=172.14.1.100,172.14.1.199,255.255.255.0,infinite
+# Cameras find the base station by connecting to TCP 4000 on their gateway.
+dhcp-option=3,172.14.1.1
+dhcp-option=6
+dhcp-authoritative
+dhcp-leasefile=/var/lib/arlo-dhcp/dnsmasq.leases
+log-dhcp
