@@ -98,6 +98,11 @@ affect every camera model, not just the Ultra.
 - The camera streams for as long as the client keeps reading, at least 75 s,
   despite `DefaultMotionStreamTimeLimit: 10`. Earlier short clips were a
   muxer artefact, not a camera limit.
+- The motion window and the RTSP session are different things. The camera
+  sends `motionTimeoutAlert` about 15 s after the trip, which is what
+  `DefaultMotionStreamTimeLimit` governs, but the stream keeps delivering
+  frames well past it. A 60 s clip recorded cleanly across a
+  `motionTimeoutAlert` at 16 s.
 - The camera switches between 24 and 15 fps mid-stream, re-sending SPS/PPS.
   Any container written live must tolerate that.
 
