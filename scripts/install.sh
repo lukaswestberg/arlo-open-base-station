@@ -244,6 +244,7 @@ RecordingBasePath: "$REC_DIR/"
 MotionClipSeconds: $MOTION_CLIP_SECONDS
 MotionRtspPort: 554
 MotionRtspLatencyMs: 200
+MotionRtspProtocols: "tcp"
 
 # Leave blank to disable a webhook.
 MotionRecordingWebHookUrl: ""

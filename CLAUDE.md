@@ -199,8 +199,10 @@ Things that cost real time to rediscover:
   same key is silently ignored, which looks exactly like a camera that refuses
   the setting.
 - **ffmpeg cannot open the Ultra's RTSP stream at all** (not a tuning problem).
-  Recording and live streaming are GStreamer; ffmpeg is only used to cut
-  thumbnails out of finished files.
+  Recording and live streaming are GStreamer; ffmpeg is only used on finished
+  local files, for thumbnails and the MPEG-TS to Matroska remux.
+- **Record to MPEG-TS, never straight to Matroska.** The camera changes
+  framerate mid-stream, and `matroskamux` aborts on the caps change.
 - **The camera serves one RTSP session at a time.** A second recording started
   while one is live dies at the SDP. `motion_recorder` guards per serial.
 - **A TCP connect to :554 always succeeds** whether or not the camera is

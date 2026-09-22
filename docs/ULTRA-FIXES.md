@@ -54,6 +54,18 @@ affect every camera model, not just the Ultra.
     `Failed to connect. (Generic error)` and left a 0-byte file. The recorder
     now holds a per-serial guard and skips the alert with a clear log line.
     Two different cameras still record simultaneously.
+14. **`matroskamux` truncated every clip.** The camera drops from 24 to 15 fps
+    mid-stream, changing both the framerate field and `codec_data`. Matroska
+    rejects a caps change outright: `Caps changes are not supported by
+    Matroska`, killing the pipeline at whatever second the camera switched
+    (3.4 s and 9.1 s were both seen). It also timestamped frames from the
+    declared framerate instead of real time, writing a 47 s stream as a 20 s
+    file. Recording now muxes to MPEG-TS and remuxes to `.mkv` with
+    `ffmpeg -c copy`. Measured after the change: 74.5 s of stream, 1124 frames,
+    73.1 s of video.
+15. **UDP cost frames and ended sessions early.** Over UDP the camera sent EOS
+    at 47 s; over TCP it was still streaming past 75 s. `MotionRtspProtocols`
+    now defaults to `tcp`.
 13. **The recorder slept the whole clip length regardless.** The camera usually
     ends the stream early (one observed clip: 47.7 s of a 60 s request), and
     `-e` has already finalised the container by then, but the thread kept
@@ -83,10 +95,11 @@ affect every camera model, not just the Ultra.
 - The camera serves **one RTSP session at a time**. A second connection while a
   stream is live fails at `gst_rtspsrc_retrieve_sdp` with
   `Failed to connect. (Generic error)`.
-- The camera decides when the motion stream ends, not the base station. A 60 s
-  request came back as 47.7 s of stream ending in EOS. Neither
-  `DefaultMotionStreamTimeLimit` (10) nor `MaxMotionStreamTimeLimit` (120)
-  predicts that number.
+- The camera streams for as long as the client keeps reading, at least 75 s,
+  despite `DefaultMotionStreamTimeLimit: 10`. Earlier short clips were a
+  muxer artefact, not a camera limit.
+- The camera switches between 24 and 15 fps mid-stream, re-sending SPS/PPS.
+  Any container written live must tolerate that.
 
 ## Camera facts (VMC5040, HW H10, FW 58.0.15)
 

@@ -206,7 +206,9 @@ function cleanupOldRecordings(callback) {
     fs.readdir(RECORDINGS_DIR, (err, files) => {
         if (err) return callback(err);
 
-        const videoFiles = files.filter(f => f.endsWith('.mp4') || f.endsWith('.mkv'));
+        // .ts only survives a failed remux, but it still ages out like the rest
+        const videoFiles = files.filter(f => f.endsWith('.mp4') || f.endsWith('.mkv')
+                                          || f.endsWith('.ts'));
         let pending = videoFiles.length;
         let deleted = 0;
 
@@ -217,7 +219,7 @@ function cleanupOldRecordings(callback) {
             fs.stat(filePath, (err, stats) => {
                 if (!err && stats.mtime.getTime() < maxAge) {
                     // Delete video file and associated files (.jpg, .log)
-                    const baseName = file.replace(/\.(mp4|mkv)$/, '');
+                    const baseName = file.replace(/\.(mp4|mkv|ts)$/, '');
                     const stem = baseName.replace('arlo-', '');
                     const filesToDelete = [
                         filePath,

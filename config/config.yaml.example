@@ -10,6 +10,9 @@ RecordingBasePath: "/home/YOUR_USER/arlo/recordings/"
 MotionClipSeconds: 10       # seconds recorded per motion event
 MotionRtspPort: 554         # 554 = H.264 1080p; 555 = 4K HEVC (Ultra only)
 MotionRtspLatencyMs: 200
+# tcp or udp. Over UDP the camera ends the session early and delivers fewer
+# frames; over TCP it kept streaming past 75 s. Only change this to debug.
+MotionRtspProtocols: "tcp"
 
 # Webhooks: leave blank to disable
 MotionRecordingWebHookUrl: ""
