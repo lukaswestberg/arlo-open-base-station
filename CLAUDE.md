@@ -175,7 +175,7 @@ This is the part that needs several files to see, so it is written out here.
    set (`REGISTER_SET_INITIAL`, or `REGISTER_SET_INITIAL_ULTRA` for the VMC5040).
    Arming, motion zones, the WiFi country code and the video config all ride
    along here. Editing a register set does nothing until the camera re-registers,
-   which in practice means a battery pull.
+   which it does on its own every few hours; a ~2 s battery pull forces it.
 5. **Motion** (`pirMotionAlert`): the ack is sent *immediately*, before anything
    slow happens, then `motion_recorder.monitor_and_record` runs on its own
    thread. It waits for the camera's RTSP server, records a fixed-length clip
@@ -205,6 +205,10 @@ Things that cost real time to rediscover:
   streaming, so it is worthless as a readiness probe. Wait for actual data.
 - **Friendly names must be unique**, and two unregistered cameras collide on the
   placeholder `'UNKNOWN'` IP because of `idx_camera_ip`.
+- **Light/spotlight keys are policy, not ad-hoc edits.** `SpotlightEnabled`
+  drives `apply_light_policy()` in `arlo/messages.py`, which only writes keys
+  already present in the chosen template - that is what keeps non-Ultra
+  register sets untouched.
 - **`RecordingBasePath` needs its trailing slash** - it is concatenated, not joined.
 - Known issues that are deliberately *not* fixed are listed in docs/ULTRA-FIXES.md.
   Check there before chasing one.
@@ -288,6 +292,9 @@ RecordingBasePath: "/home/user/arlo/recordings/"   # trailing slash required
 MotionClipSeconds: 10
 MotionRtspPort: 554   # 555 = 4K HEVC on Ultra
 MotionRecordingTimeout: 120
+
+# false = the Ultra's spotlight never lights (night video becomes IR B/W)
+SpotlightEnabled: false
 
 # Push notifications (ntfy)
 NtfyEnabled: true

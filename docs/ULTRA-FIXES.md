@@ -60,6 +60,18 @@ affect every camera model, not just the Ultra.
   view would need an H.265 pipeline. Live view has not been tested on the
   Ultra.
 - Viewer retention cleanup only runs when `/api/recordings` is requested.
+- `SpotlightEnabled: false` is not proven to be absolute. Every key it writes
+  is named `*Alert`, so they plausibly govern only what the lamp does on a
+  motion alert, not the camera's own ambient-light behaviour. If the spotlight
+  still lights, no register set will fix it and the fallback is physical.
+- The `IRLedState` / `IRCutState` values that *enable* infrared are unverified.
+  Only `"off"` and `"engaged"` have ever been observed; the camera does not
+  error on a value it does not recognise, so a wrong guess shows up as black
+  night footage. `arlo/messages.py` carries a ladder of candidates to try.
+- `camera.py` builds `Message(arlo.messages.REGISTER_SET)` without `deepcopy`
+  in `pir_led`, `arm`, `mic_request` and `speaker_request`, then assigns
+  `SetValues`, permanently mutating the module-level template for the life of
+  the process.
 
 ## Camera facts (VMC5040, HW H10, FW 58.0.15)
 
@@ -74,3 +86,13 @@ affect every camera model, not just the Ultra.
 - Register-set changes only apply on registration, which happens every few
   hours on its own. Pulling the battery for ~2 s forces it.
 - Deep sleep works on a hostapd AP (`set PM2 mode`, `glacial_timer 3600`).
+- The camera runs its own ambient-light (ALS) state machine, independent of the
+  base station and still running while disconnected. It tracks two separate
+  channels, IR and Spotlight, each with its own day/night state:
+  `Entering night mode for Spotlight. Current lux: 151, enter lux threshold:
+  600. Trigger count: 0 (thr:2), bitmask: 0x2, force: 0`. It also logs
+  `(non manual mode), updating lights`, so the firmware distinguishes a manual
+  light mode from automatic and defaults to automatic.
+- The registration `Capabilities` list advertises `IRLED`, `IRCutFilter` and
+  `NightVision`, but no spotlight capability, even though the firmware clearly
+  drives one.

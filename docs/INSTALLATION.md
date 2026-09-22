@@ -199,6 +199,13 @@ that are sent to the camera, such as the country code and PIR, only apply when
 the camera re-registers. It does that on its own every few hours; to force
 it, pull the battery for ~2 s.
 
+`SpotlightEnabled` defaults to `false`, so an Arlo Ultra's white spotlight
+never lights. Infrared is enabled in its place, which means night recordings
+are black-and-white rather than colour. Cameras with no spotlight are
+unaffected. Note that the camera also runs its own ambient-light logic
+independently of the base station, so this is not guaranteed to be absolute -
+see docs/ULTRA-FIXES.md.
+
 ## Pairing a Camera
 
 ```bash
