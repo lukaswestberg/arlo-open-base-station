@@ -29,3 +29,6 @@ Thumbs.db
 .idea/
 .vscode/
 *.swp
+
+# Migration/Update reference
+ref/
