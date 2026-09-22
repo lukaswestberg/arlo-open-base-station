@@ -3,9 +3,12 @@
 #
 #   cp config/install.conf.example config/install.conf   # optional, defaults work
 #   sudo scripts/install.sh [--yes]
+#   sudo scripts/install.sh --update     # code-only redeploy (see scripts/update.sh)
 #
 # Safe to re-run: code is redeployed, while config.yaml, arlo.db, .env and the
-# WiFi passphrase are kept. It deliberately does NOT touch the firewall,
+# WiFi passphrase are kept. --update skips packages and all WiFi/DHCP setup,
+# takes paths from the live units, and restarts only arlo and arlo-viewer,
+# so cameras stay connected. It deliberately does NOT touch the firewall,
 # /etc/dnsmasq.conf or port 53, so it can share a host with Docker, Pi-hole,
 # Tailscale, etc.
 
@@ -24,7 +27,14 @@ die()       { log_error "$1"; exit 1; }
 gen_secret() { python3 -c "import secrets,string; a=string.ascii_letters+string.digits; print(''.join(secrets.choice(a) for _ in range($1)))"; }
 
 ASSUME_YES=0
-case "${1:-}" in -y|--yes) ASSUME_YES=1 ;; esac
+UPDATE=0
+for arg in "$@"; do
+    case "$arg" in
+        -y|--yes) ASSUME_YES=1 ;;
+        --update) UPDATE=1 ;;
+        *) die "Unknown option: $arg (use --yes and/or --update)" ;;
+    esac
+done
 
 [ "$EUID" -eq 0 ] || die "Please run as root: sudo $0"
 
@@ -37,6 +47,33 @@ else
     log_warn "No config/install.conf, using defaults from install.conf.example"
     # shellcheck disable=SC1091
     source "$PROJECT_DIR/config/install.conf.example"
+fi
+
+# --update deploys into whatever is live, whatever install.conf says.
+if [ "$UPDATE" -eq 1 ]; then
+    UNIT=/etc/systemd/system/arlo.service
+    [ -f "$UNIT" ] || die "No existing install (no $UNIT). Run without --update first."
+    # Only the full installer writes arlo-dhcp.service; without it this is an
+    # older or hand-built setup that needs one full run to migrate.
+    [ -f /etc/systemd/system/arlo-dhcp.service ] \
+        || die "This host predates the current installer. Run the full installer once: sudo $0"
+    live_app="$(sed -n 's/^WorkingDirectory=//p' "$UNIT" | sed 's|/$||')"
+    [ "$(basename "$live_app")" = app ] \
+        || die "arlo.service runs from $live_app, not a <BASE_DIR>/app layout. Run the full installer once."
+    BASE_DIR="$(dirname "$live_app")"
+    live_user="$(sed -n 's/^User=//p' "$UNIT")"
+    [ -n "$live_user" ] && ARLO_USER="$live_user"
+    # The AP config is the authority on which radio hosts the cameras.
+    live_iface="$(sed -n 's/^interface=//p' /etc/hostapd/hostapd.conf 2>/dev/null | head -1 || true)"
+    [ -n "$live_iface" ] || live_iface="$(sed -n 's/^Environment=ARLO_AP_INTERFACE=//p' "$UNIT")"
+    [ -n "$live_iface" ] || die "Cannot determine the live WiFi interface. Run the full installer."
+    WIFI_INTERFACE="$live_iface"
+    # Keep the node the live viewer already uses (sudo's PATH may differ).
+    live_node="$(sed -n 's/^ExecStart=\([^ ]*\) server.js$/\1/p' /etc/systemd/system/arlo-viewer.service 2>/dev/null || true)"
+    [ -n "$live_node" ] && [ -x "$live_node" ] && NODE_BIN="$live_node"
+    live_ip="$(sed -n 's|.* addr replace \([0-9.]*\)/24 .*|\1|p' \
+        /etc/systemd/system/hostapd.service.d/10-arlo*.conf 2>/dev/null | head -1 || true)"
+    [ -n "$live_ip" ] && AP_SUBNET="${live_ip%.*}"
 fi
 
 ARLO_USER="${ARLO_USER:-${SUDO_USER:-}}"
@@ -73,6 +110,7 @@ LOG_DIR="$BASE_DIR/logs"
 ENV_FILE="$BASE_DIR/.env"
 DHCP_CONF="/etc/arlo/dnsmasq.conf"
 
+if [ "$UPDATE" -eq 0 ]; then
 # ===== Preflight =====
 [ -d "/sys/class/net/$WIFI_INTERFACE" ] \
     || die "WiFi interface '$WIFI_INTERFACE' not found. Available: $(ls /sys/class/net | tr '\n' ' ')"
@@ -137,7 +175,11 @@ if [ "$ASSUME_YES" -ne 1 ]; then
     read -r -p "Continue? [y/N] " reply || die "No terminal to confirm on; re-run with --yes"
     [[ "$reply" =~ ^[Yy]$ ]] || { log_info "Cancelled"; exit 0; }
 fi
+fi  # full install only: preflight
 
+[ "$UPDATE" -eq 1 ] && log_info "Updating code in $BASE_DIR (WiFi/DHCP untouched)"
+
+if [ "$UPDATE" -eq 0 ]; then
 # ===== Packages =====
 log_info "Installing packages..."
 export DEBIAN_FRONTEND=noninteractive
@@ -158,8 +200,10 @@ apt-get install -y -qq --no-install-recommends \
 
 IP_BIN="$(command -v ip)"
 DNSMASQ_BIN="$(command -v dnsmasq)" || die "dnsmasq binary not found after install"
-NODE_BIN="$(command -v node || command -v nodejs || true)"
-[ -n "$NODE_BIN" ] || die "node not found after install"
+fi  # full install only: packages
+
+NODE_BIN="${NODE_BIN:-$(command -v node || command -v nodejs || true)}"
+[ -n "$NODE_BIN" ] || die "node not found (install nodejs, or run the full installer)"
 log_info "Using node $("$NODE_BIN" --version) at $NODE_BIN"
 
 # ===== Directories and code =====
@@ -249,6 +293,7 @@ else
     log_info "Keeping existing $ENV_FILE (viewer password unchanged)"
 fi
 
+if [ "$UPDATE" -eq 0 ]; then
 # ===== Release the radio from other network managers =====
 rfkill unblock wifi 2>/dev/null || true
 
@@ -384,6 +429,7 @@ fi
 
 # Drop-in name used by earlier hand-built installs; superseded by 10-arlo.conf.
 rm -f /etc/systemd/system/hostapd.service.d/10-arlo-addr.conf
+fi  # full install only: WiFi AP and DHCP
 
 # ===== arlo services =====
 log_info "Installing systemd units"
@@ -454,8 +500,8 @@ for helper in arlo-pair arlo-status; do
     chmod 755 "/usr/local/bin/$helper"
 done
 
-# ===== Optional bore tunnels =====
-if [ -n "${BORE_REMOTE_SERVER:-}" ]; then
+# ===== Optional bore tunnels (full install only) =====
+if [ "$UPDATE" -eq 0 ] && [ -n "${BORE_REMOTE_SERVER:-}" ]; then
     log_info "Installing bore tunnel units"
     [ -x /usr/local/bin/bore ] || log_warn "/usr/local/bin/bore not found; install it before starting the tunnels"
     for spec in "security-bore-tunnel:3003:${BORE_VIEWER_PORT:-8084}:viewer" \
@@ -480,18 +526,24 @@ EOF
     done
 fi
 
+# Record what is deployed (root reading a user-owned repo needs safe.directory).
+DEPLOYED="$(git -c safe.directory="$PROJECT_DIR" -C "$PROJECT_DIR" describe --always --dirty 2>/dev/null || echo unknown)"
+echo "$DEPLOYED" > "$BASE_DIR/.deployed-version"
+
 # ===== Start everything =====
 log_info "Starting services"
 systemctl daemon-reload
-systemctl unmask hostapd >/dev/null 2>&1 || true
-systemctl enable hostapd arlo-dhcp arlo arlo-viewer >/dev/null 2>&1
 # Failures here are reported by the health checks below, with hints.
-systemctl restart hostapd || true
-sleep 3
-systemctl restart arlo-dhcp || true
+if [ "$UPDATE" -eq 0 ]; then
+    systemctl unmask hostapd >/dev/null 2>&1 || true
+    systemctl enable hostapd arlo-dhcp arlo arlo-viewer >/dev/null 2>&1
+    systemctl restart hostapd || true
+    sleep 3
+    systemctl restart arlo-dhcp || true
+fi
 systemctl restart arlo || true
 systemctl restart arlo-viewer || true
-if [ -n "${BORE_REMOTE_SERVER:-}" ] && [ -x /usr/local/bin/bore ]; then
+if [ "$UPDATE" -eq 0 ] && [ -n "${BORE_REMOTE_SERVER:-}" ] && [ -x /usr/local/bin/bore ]; then
     systemctl enable --now security-bore-tunnel ntfy-bore-tunnel >/dev/null 2>&1 || true
 fi
 sleep 5
@@ -520,7 +572,13 @@ fi
 
 HOST_IP="$(ip route get 1.1.1.1 2>/dev/null | sed -n 's/.* src \([0-9.]*\).*/\1/p')"
 echo ""
-log_info "===== INSTALL COMPLETE ====="
+if [ "$UPDATE" -eq 1 ]; then
+    log_info "===== UPDATE COMPLETE ($DEPLOYED) ====="
+    [ -n "${NEW_VIEWER_PASSWORD:-}" ] && log_warn ".env was missing; new viewer login: $NEW_VIEWER_PASSWORD"
+    [ "$FAILED" -ne 0 ] && log_warn "Some checks failed. Try: journalctl -u arlo -u arlo-viewer -n 50"
+    exit "$FAILED"
+fi
+log_info "===== INSTALL COMPLETE ($DEPLOYED) ====="
 echo "  Viewer:        http://${HOST_IP:-<this-host>}:3003"
 if [ -n "${NEW_VIEWER_PASSWORD:-}" ]; then
     echo "  Viewer login:  $NEW_VIEWER_PASSWORD   (stored in $ENV_FILE)"

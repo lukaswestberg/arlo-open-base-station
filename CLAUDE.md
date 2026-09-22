@@ -49,10 +49,10 @@ This project provides a complete replacement for Arlo's commercial base station 
 - Python `venv/`
 
 ### Development Workflow
-1. Make changes in the repo, then redeploy with `sudo scripts/install.sh --yes` (idempotent; keeps config.yaml, arlo.db, .env and the WiFi PSK). Hot-fixes can be made in `~/arlo/app` or `~/arlo/viewer` directly
-2. Test by restarting services
-3. If you hot-fixed the live copy, copy the change back to the repo
-4. Commit and push to GitHub
+1. Make changes in the repo, commit and push to the fork
+2. On the host: `scripts/update.sh` (git pull --ff-only, then `install.sh --update`: code-only redeploy, restarts arlo + arlo-viewer, never touches hostapd/DHCP)
+3. Changes to WiFi/DHCP/packages or `install.sh` networking: run the full `sudo scripts/install.sh` (idempotent)
+4. Never hot-fix `~/arlo/app` or `~/arlo/viewer` without copying the change back: the next update overwrites it
 
 ### Fresh Install (New Machine)
 1. Clone the repo
@@ -83,7 +83,8 @@ arlo-open-base-station/
 │   ├── security-bore-tunnel.service  # Bore tunnel for viewer (optional)
 │   └── ntfy-bore-tunnel.service      # Bore tunnel for ntfy (optional)
 ├── scripts/
-│   ├── install.sh             # One-shot, idempotent installer
+│   ├── install.sh             # One-shot, idempotent installer (--update = code only)
+│   ├── update.sh              # git pull + install.sh --update
 │   ├── arlo-pair              # WPS pairing helper (-> /usr/local/bin)
 │   └── arlo-status            # Health overview (-> /usr/local/bin)
 └── docs/                      # Additional documentation

@@ -64,6 +64,8 @@ cp config/install.conf.example config/install.conf
 
 sudo scripts/install.sh      # packages, WiFi AP, DHCP, services, health checks
 sudo arlo-pair               # then hold the camera's SYNC button ~2 s
+
+scripts/update.sh            # later: pull your fork and redeploy (cameras stay connected)
 ```
 
 The installer is safe to re-run and does not touch your firewall, port 53 or

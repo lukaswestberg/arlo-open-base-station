@@ -142,6 +142,37 @@ cameras stay paired. If an older install lives elsewhere (e.g. `/opt/arlo-cam-ap
 point `BASE_DIR` at it or its database and camera names will not carry over.
 A hand-built `/etc/dnsmasq.d/arlo.conf` is migrated to `arlo-dhcp.service`.
 
+## Updating
+
+After pushing changes to your fork, on the host:
+
+```bash
+cd ~/arlo-open-base-station
+scripts/update.sh
+```
+
+This pulls with `--ff-only`, shows the new commits, and runs
+`sudo scripts/install.sh --update`, which:
+
+- redeploys `src/` into the live install and refreshes pip/npm dependencies;
+- takes the install location, user, WiFi interface and node binary from
+  the live setup (systemd units and `hostapd.conf`), not from `install.conf`;
+- restarts only `arlo` and `arlo-viewer`. hostapd and DHCP keep running, so
+  cameras stay connected;
+- keeps `config.yaml`, `arlo.db` and `.env`, and records the deployed commit in
+  `BASE_DIR/.deployed-version`.
+
+`--update` skips packages, all WiFi/DHCP setup and the bore tunnel units.
+A host set up by hand or by an older installer (no `arlo-dhcp.service`) is
+refused until it has had one full `sudo scripts/install.sh` run. After changes to those, or
+to add a key a new version needs in `config.yaml`, run the full
+`sudo scripts/install.sh` instead; it is equally safe to re-run.
+`update.sh` points this out when the installer itself changed.
+
+Don't edit files in the live install directly. `--update` replaces `app/`
+and `viewer/` code (everything except `config.yaml`, `arlo.db`, `venv/` and
+`node_modules/`) with what is in the repo.
+
 ## Configuration Reference
 
 `config/install.conf` (all optional):
