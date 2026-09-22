@@ -1,13 +1,17 @@
+import os
 import threading
 import sys
 import logging
 s_print_lock = threading.Lock()
 
+# Set by the systemd unit; /tmp fallback keeps ad-hoc runs working.
+LOG_FILE = os.environ.get('ARLO_LOG_FILE', '/tmp/arlo-service.log')
+
 logging.basicConfig(format='%(asctime)s %(levelname)-8s %(message)s',
         level=logging.INFO,
         datefmt='%Y-%m-%d %H:%M:%S',
         handlers=[
-            logging.FileHandler('/tmp/arlo-service.log'),
+            logging.FileHandler(LOG_FILE),
             logging.StreamHandler(sys.stdout)
         ])
 

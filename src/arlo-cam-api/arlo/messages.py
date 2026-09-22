@@ -694,7 +694,17 @@ REGISTER_SET_INITIAL_ULTRA = {
             "Audio1EncodeFormat": 1,
             "ArloSmart": True,
             "CvrModeEnabled": False,
-            "AlertBackoffTime": 0
+            "AlertBackoffTime": 0,
+            # Upstream's Ultra set omits the entire PIR block, so the camera is
+            # never armed and never told to stream on motion. Mirrored from
+            # REGISTER_SET_INITIAL. PIRAction=Stream is what opens :554 on a trip.
+            "PIRTargetState": "Armed",
+            "PIRStartSensitivity": 80,
+            "PIRAction": "Stream",
+            "AudioTargetState": "Disarmed",
+            "VideoMotionEstimationEnable": True,
+            "VideoMotionSensitivity": 80,
+            "DefaultMotionStreamTimeLimit": 10
         }
 }
 

@@ -152,13 +152,6 @@ def user_stream_active(serial):
     if active is None:
         flask.abort(400)
 
-    # Trigger recording when motion detected (active=1)
-    if int(active) == 1:
-        import subprocess
-        subprocess.Popen([os.path.expanduser('~/arlo-record-oneshot.sh')],
-                        stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL)
-
     result = g.camera.set_user_stream_active(int(active))
     return flask.jsonify({"result":result})
 

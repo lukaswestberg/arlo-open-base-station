@@ -90,7 +90,7 @@ app.post('/login', (req, res) => {
 // Load camera aliases from config
 let CAMERA_ALIASES = {};
 try {
-    const configPath = '/opt/arlo-cam-api/config.yaml';
+    const configPath = process.env.ARLO_CONFIG || '/opt/arlo-cam-api/config.yaml';
     const configFile = fs.readFileSync(configPath, 'utf8');
     const config = yaml.load(configFile);
     CAMERA_ALIASES = config.CameraAliases || {};
@@ -198,7 +198,7 @@ app.post('/api/camera/:serial/disarm', (req, res) => {
 
 // API: List all recordings
 // Cleanup old recordings (older than 7 days)
-const RETENTION_DAYS = 7;
+const RETENTION_DAYS = parseInt(process.env.RETENTION_DAYS, 10) || 7;
 
 function cleanupOldRecordings(callback) {
     const maxAge = Date.now() - (RETENTION_DAYS * 24 * 60 * 60 * 1000);
@@ -218,10 +218,13 @@ function cleanupOldRecordings(callback) {
                 if (!err && stats.mtime.getTime() < maxAge) {
                     // Delete video file and associated files (.jpg, .log)
                     const baseName = file.replace(/\.(mp4|mkv)$/, '');
+                    const stem = baseName.replace('arlo-', '');
                     const filesToDelete = [
                         filePath,
                         path.join(RECORDINGS_DIR, baseName + '.jpg'),
-                        path.join(RECORDINGS_DIR, 'ffmpeg-' + baseName.replace('arlo-', '') + '.log')
+                        // ffmpeg- is the upstream recorder, gst- is ours
+                        path.join(RECORDINGS_DIR, 'ffmpeg-' + stem + '.log'),
+                        path.join(RECORDINGS_DIR, 'gst-' + stem + '.log')
                     ];
 
                     filesToDelete.forEach(f => {

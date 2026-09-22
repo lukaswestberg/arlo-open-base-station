@@ -1,6 +1,7 @@
 import socket
 import sys
 import json
+import copy
 import threading
 import sqlite3
 import time
@@ -11,9 +12,10 @@ from arlo.messages import Message
 from arlo.socket import ArloSocket
 import arlo.messages
 from arlo.camera import Camera
-from helpers.safe_print import s_print
+from helpers.safe_print import s_print, LOG_FILE
 from helpers.recorder import Recorder
 from helpers.webhook_manager import WebHookManager
+from helpers import motion_recorder
 import api.api
 from helpers.connectivity_checker import ConnectivityChecker
 
@@ -23,7 +25,7 @@ logging.basicConfig(
     format='%(asctime)s %(levelname)-8s %(message)s',
     datefmt='%Y-%m-%d %H:%M:%S',
     handlers=[
-        logging.FileHandler('/tmp/arlo-service.log'),
+        logging.FileHandler(LOG_FILE),
         logging.StreamHandler(sys.stdout)
     ]
 )
@@ -39,7 +41,16 @@ webhook_manager = WebHookManager(config)
 
 with sqlite3.connect('arlo.db') as conn:
     c = conn.cursor()
-    c.execute("CREATE TABLE IF NOT EXISTS camera (ip text, serialnumber text, hostname text, status text, register_set text, friendlyname text)")
+    c.execute("""CREATE TABLE IF NOT EXISTS camera (
+        ip text, serialnumber text, hostname text, status text,
+        register_set text, friendlyname text, last_seen real,
+        mac_address text, connected integer, armed integer default 1)""")
+    # Self-heal databases created by revisions that lacked these columns.
+    _have = {r[1] for r in c.execute("PRAGMA table_info(camera)").fetchall()}
+    for _col, _decl in (("last_seen", "real"), ("mac_address", "text"),
+                        ("connected", "integer"), ("armed", "integer default 1")):
+        if _col not in _have:
+            c.execute(f"ALTER TABLE camera ADD COLUMN {_col} {_decl}")
     c.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_camera_serialnumber ON camera (serialnumber)")
     c.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_camera_ip ON camera (ip)")
     c.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_camera_friendlyname ON camera (friendlyname)")
@@ -174,7 +185,10 @@ def monitor_and_record(ip, rtsp_url, filename, serial_number, zones, webhook_man
         s_print(f"[{ip}] Warning: Thumbnail not ready after {max_wait}s")
 
     # Trigger webhook notification (thumbnail should now exist)
-    webhook_manager.motion_detected(ip, friendly_name, hostname, serial_number, zones, filename)
+    try:
+        webhook_manager.motion_detected(ip, friendly_name, hostname, serial_number, zones, filename)
+    except Exception as e:
+        s_print(f"[{ip}] Notification failed (recording continues): {e}")
 
     # Wait for ffmpeg to complete with timeout
     timeout = recording_duration + 5  # recording duration + 5 second buffer
@@ -226,18 +240,23 @@ class ConnectionThread(threading.Thread):
                         # Preserve existing armed state for known cameras
                     camera.persist()
                     s_print(f"<[{self.ip}][{msg['ID']}] Registration from {msg['SystemSerialNumber']} - {camera.hostname}")
-                    if msg['SystemModelNumber'] ==  'VMC5040':
-                        registerSet = Message(arlo.messages.REGISTER_SET_INITIAL_ULTRA)
+                    if msg['SystemModelNumber'] == 'VMC5040':
+                        registerSet = Message(copy.deepcopy(arlo.messages.REGISTER_SET_INITIAL_ULTRA))
                     else:
-                        registerSet = Message(arlo.messages.REGISTER_SET_INITIAL)
+                        registerSet = Message(copy.deepcopy(arlo.messages.REGISTER_SET_INITIAL))
+                    # The camera honours SetValues.WifiCountryCode. Upstream hardcodes
+                    # that to FR (Ultra) / EU (others) and the top-level key alone is
+                    # ignored, so set both. deepcopy because Message does not copy and
+                    # we would otherwise mutate the module-level template.
                     registerSet['WifiCountryCode'] = WIFI_COUNTRY_CODE
+                    registerSet['SetValues']['WifiCountryCode'] = WIFI_COUNTRY_CODE
 
                     # Apply current armed state to registration message
                     if camera.armed == 0:
-                        # User wants camera disarmed - override REGISTER_SET_INITIAL defaults
-                        registerSet['PIRTargetState'] = 0
-                        registerSet['VideoMotionEstimationEnable'] = 0
-                        registerSet['AudioTargetState'] = 0
+                        # These live inside SetValues; top-level copies are ignored.
+                        registerSet['SetValues']['PIRTargetState'] = "Disarmed"
+                        registerSet['SetValues']['VideoMotionEstimationEnable'] = False
+                        registerSet['SetValues']['AudioTargetState'] = "Disarmed"
                     # else: keep REGISTER_SET_INITIAL defaults (Armed, VME enabled, Audio disarmed)
 
                     camera.send_message(registerSet)
@@ -300,7 +319,7 @@ class ConnectionThread(threading.Thread):
                        zones = msg['PIRMotion'].get('zones', '')
 
                        monitor_thread = threading.Thread(
-                           target=monitor_and_record,
+                           target=motion_recorder.monitor_and_record,
                            args=(self.ip, rtsp_url, filename, camera.serial_number, zones, webhook_manager, camera.friendly_name, camera.hostname),
                            daemon=True
                        )
@@ -322,6 +341,10 @@ class ConnectionThread(threading.Thread):
                            if self.ip in recorders and recorders[self.ip] is not None:
                                recorders[self.ip].stop()
                                del recorders[self.ip]
+                elif (msg['Type'] == "logMessage"):
+                    _n = len(msg.dictionary.get('LogString', '') or '')
+                    s_print(f"<[{self.ip}][{msg['ID']}] logMessage "
+                            f"({msg.dictionary.get('LogType')}, {_n} bytes) - suppressed")
                 else:
                     s_print(f"<[{self.ip}][{msg['ID']}] Unknown message")
                     s_print(msg)

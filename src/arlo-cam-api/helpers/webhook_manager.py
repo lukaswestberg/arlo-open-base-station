@@ -10,9 +10,16 @@ class WebHookManager:
         self.config = config
 
     def motion_detected(self, ip,friendly_name,hostname,serial_number,zone,file_name):
-        # Send standard webhook
-        r = self.motion(ip,friendly_name,hostname, serial_number,zone,file_name,time.time(), url=self.config['MotionRecordingWebHookUrl'],encoding="application/json", timeout=5)
-        # s_print(str(r))  # Disabled - too verbose
+        # Send standard webhook only if one is actually configured. An empty
+        # URL reaches requests.post("") and raises MissingSchema.
+        url = self.config.get('MotionRecordingWebHookUrl') or ''
+        if url:
+            try:
+                self.motion(ip, friendly_name, hostname, serial_number, zone,
+                            file_name, time.time(), url=url,
+                            encoding="application/json", timeout=5)
+            except Exception as e:
+                s_print(f"[WEBHOOK] motion webhook failed: {e}")
 
         # Send ntfy alert if enabled
         if self.config.get('NtfyEnabled', False):
@@ -47,12 +54,12 @@ class WebHookManager:
                     headers["Attach"] = f"{thumbnail_url}/{thumbnail_filename}"
 
             # Add click action to video viewer
-            base_url = self.config.get('NtfyClickUrl', 'https://security.example.com')
+            # Blank means no link: ntfy rejects a view action with an empty URL.
+            base_url = self.config.get('NtfyClickUrl') or ''
             # TODO: Add specific video linking when arlo-viewer supports URL parameters
-
-            headers["Click"] = base_url
-            # Add action button with custom text
-            headers["Actions"] = f"view, See video, {base_url}, clear=true"
+            if base_url:
+                headers["Click"] = base_url
+                headers["Actions"] = f"view, See video, {base_url}, clear=true"
 
             # Send notification
             response = requests.post(
@@ -98,8 +105,9 @@ class WebHookManager:
             }
 
             # Add click action to camera status page
-            base_url = self.config.get('NtfyClickUrl', 'https://security.example.com')
-            headers["Click"] = base_url
+            base_url = self.config.get('NtfyClickUrl') or ''
+            if base_url:
+                headers["Click"] = base_url
 
             # Send notification
             response = requests.post(
