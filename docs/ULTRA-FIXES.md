@@ -48,6 +48,17 @@ affect every camera model, not just the Ultra.
     They are now summarised on one line.
 11. **Viewer cleanup only removed `ffmpeg-*.log`.** It now also removes the
     `gst-<serial>-<time>.log` that the recorder writes next to each clip.
+12. **Overlapping motion alerts fought over the RTSP stream.** Each alert spawns
+    a recording thread, but the camera serves only one RTSP session, so a clip
+    starting while another was live died at the SDP with
+    `Failed to connect. (Generic error)` and left a 0-byte file. The recorder
+    now holds a per-serial guard and skips the alert with a clear log line.
+    Two different cameras still record simultaneously.
+13. **The recorder slept the whole clip length regardless.** The camera usually
+    ends the stream early (one observed clip: 47.7 s of a 60 s request), and
+    `-e` has already finalised the container by then, but the thread kept
+    sleeping - holding the camera's slot long after the stream was gone. It now
+    polls for the process exiting.
 
 ## Known, not fixed
 
@@ -68,6 +79,14 @@ affect every camera model, not just the Ultra.
   in `pir_led`, `arm`, `mic_request` and `speaker_request`, then assigns
   `SetValues`, permanently mutating the module-level template for the life of
   the process.
+
+- The camera serves **one RTSP session at a time**. A second connection while a
+  stream is live fails at `gst_rtspsrc_retrieve_sdp` with
+  `Failed to connect. (Generic error)`.
+- The camera decides when the motion stream ends, not the base station. A 60 s
+  request came back as 47.7 s of stream ending in EOS. Neither
+  `DefaultMotionStreamTimeLimit` (10) nor `MaxMotionStreamTimeLimit` (120)
+  predicts that number.
 
 ## Camera facts (VMC5040, HW H10, FW 58.0.15)
 

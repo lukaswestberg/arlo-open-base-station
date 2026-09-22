@@ -13,6 +13,7 @@ file, which it handles without trouble.
 import os
 import signal
 import subprocess
+import threading
 import time
 
 import yaml
@@ -26,6 +27,12 @@ with open(os.path.join(_APP_DIR, 'config.yaml')) as _f:
 CLIP_SECONDS = int(_config.get('MotionClipSeconds', 10))
 RTSP_PORT = int(_config.get('MotionRtspPort', 554))
 RTSP_LATENCY_MS = int(_config.get('MotionRtspLatencyMs', 200))
+
+# The camera serves exactly one RTSP session. A second gst-launch started while
+# a recording is live dies at the SDP with "Failed to connect", so overlapping
+# motion alerts must not race each other for the stream.
+_active = set()
+_active_lock = threading.Lock()
 
 
 def _pipeline(ip, filename):
@@ -65,6 +72,23 @@ def _make_thumbnail(filename, thumbnail_filename):
 
 def monitor_and_record(ip, rtsp_url, filename, serial_number, zones,
                        webhook_manager, friendly_name, hostname):
+    """Record one motion clip, unless this camera is already recording."""
+    with _active_lock:
+        if serial_number in _active:
+            s_print('[' + ip + '] motion while already recording, skipped '
+                    '(the camera serves one RTSP session at a time)')
+            return
+        _active.add(serial_number)
+    try:
+        _record(ip, filename, serial_number, zones, webhook_manager,
+                friendly_name, hostname)
+    finally:
+        with _active_lock:
+            _active.discard(serial_number)
+
+
+def _record(ip, filename, serial_number, zones, webhook_manager,
+            friendly_name, hostname):
     thumbnail_filename = filename.replace('.mkv', '.jpg')
     # Pair the log with the clip (arlo-X.mkv -> gst-X.log) so the viewer's
     # retention sweep removes both together.
@@ -85,8 +109,14 @@ def monitor_and_record(ip, rtsp_url, filename, serial_number, zones,
         s_print('[' + ip + '] could not start gst-launch: ' + str(exc))
         return
 
+    # The camera usually ends the stream before CLIP_SECONDS is up, and -e has
+    # already finalised the container by then. Poll rather than sleeping the
+    # full clip length, so the next motion alert is not locked out of a stream
+    # that is no longer being used.
+    deadline = time.monotonic() + CLIP_SECONDS
+    while time.monotonic() < deadline and proc.poll() is None:
+        time.sleep(0.5)
     # -e turns SIGINT into an EOS, which finalises the matroska container.
-    time.sleep(CLIP_SECONDS)
     if proc.poll() is None:
         proc.send_signal(signal.SIGINT)
     try:
@@ -100,8 +130,15 @@ def monitor_and_record(ip, rtsp_url, filename, serial_number, zones,
 
     if not os.path.exists(filename) or os.path.getsize(filename) < 10000:
         size = os.path.getsize(filename) if os.path.exists(filename) else 0
-        s_print('[' + ip + '] recording failed, ' + str(size)
-                + ' bytes, see ' + logfile)
+        reason = ''
+        try:
+            with open(logfile) as fh:
+                if 'Failed to connect' in fh.read():
+                    reason = ' - camera refused the RTSP connection'
+        except OSError:
+            pass
+        s_print('[' + ip + '] recording failed, ' + str(size) + ' bytes'
+                + reason + ', see ' + logfile)
         return
 
     s_print('[' + ip + '] wrote ' + filename + ' ('

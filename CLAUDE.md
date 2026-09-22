@@ -201,6 +201,8 @@ Things that cost real time to rediscover:
 - **ffmpeg cannot open the Ultra's RTSP stream at all** (not a tuning problem).
   Recording and live streaming are GStreamer; ffmpeg is only used to cut
   thumbnails out of finished files.
+- **The camera serves one RTSP session at a time.** A second recording started
+  while one is live dies at the SDP. `motion_recorder` guards per serial.
 - **A TCP connect to :554 always succeeds** whether or not the camera is
   streaming, so it is worthless as a readiness probe. Wait for actual data.
 - **Friendly names must be unique**, and two unregistered cameras collide on the
