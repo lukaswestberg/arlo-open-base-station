@@ -1,6 +1,8 @@
-# CLAUDE.md - Arlo Open Base Station
+# CLAUDE.md
 
-This is the development documentation for the Arlo Open Base Station project - a DIY replacement for Arlo's commercial base stations.
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+Arlo Open Base Station - a DIY replacement for Arlo's commercial base stations.
 
 ## Project Overview
 
@@ -40,6 +42,9 @@ This project provides a complete replacement for Arlo's commercial base station 
 /etc/hostapd/hostapd.conf           # Camera AP (contains the WiFi PSK)
 /etc/arlo/dnsmasq.conf              # Camera DHCP (arlo-dhcp.service, DHCP only, port=0)
 ```
+
+`ref/` is gitignored: local-only handoff notes and patches from the working
+Orange Pi deployment. Useful context, never a build input.
 
 ### What is NOT in the Repository
 - `config.yaml` with real camera serials, ntfy topics, passwords
@@ -101,6 +106,109 @@ sudo arlo-pair
 The installer must never touch the firewall, the system dnsmasq (`/etc/dnsmasq.conf`,
 `/etc/dnsmasq.d`) or port 53 (hosts commonly run Docker/Pi-hole/Tailscale). See docs/INSTALLATION.md.
 
+### Installer invariants
+
+Hold these when editing `scripts/install.sh`:
+
+- **Never touch the firewall, `/etc/dnsmasq.conf`, `/etc/dnsmasq.d` or port 53.**
+  Camera DHCP is a private dnsmasq instance (`arlo-dhcp.service`, `port=0`,
+  `/etc/arlo/dnsmasq.conf`) precisely so a Pi-hole or Docker on the same host
+  keeps working.
+- **Re-running must be safe.** Existing secrets are preserved, not regenerated:
+  changing the SSID or PSK forces every camera to be re-paired, so they are only
+  written when explicitly set.
+- **`arlo-dhcp.service` is the marker for `--update`.** Its absence means the
+  host predates this installer and needs one full run first.
+- The script runs under `set -euo pipefail`. Watch for SIGPIPE from
+  `... | head`, bare `[ x ] && y` as the last statement of a function, and
+  heredoc delimiters colliding with nested heredocs.
+- `--update` touches code and units only. It must never restart hostapd or DHCP,
+  and it must not write the optional bore units.
+
+## Verification
+
+There is no test suite. Nothing here can be exercised for real off a Linux host
+with a spare AP-capable radio and a camera, so verify what can be verified:
+
+```bash
+# Python syntax (use the host venv; any python3 works on a dev box)
+find src/arlo-cam-api -name '*.py' -print0 | xargs -0 python3 -m py_compile
+node --check src/arlo-viewer/server.js
+bash -n scripts/install.sh scripts/update.sh scripts/arlo-pair scripts/arlo-status
+```
+
+Installer changes get a container dry run. It exercises packages, the venv, npm,
+GStreamer element resolution and `dnsmasq --test`, and with `systemctl` stubbed
+it prints the service calls instead of making them:
+
+```bash
+docker run --rm -v "$PWD":/src:ro ubuntu:22.04 bash -c '
+  apt-get update -qq
+  apt-get install -y -qq --no-install-recommends sudo rsync ca-certificates
+  useradd -m pi && echo "pi ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/pi
+  printf "#!/bin/sh\necho \"systemctl \$*\"\nexit 0\n" > /usr/local/bin/systemctl
+  chmod +x /usr/local/bin/systemctl
+  cp -r /src /home/pi/repo && chown -R pi /home/pi/repo
+  su pi -c "sudo bash /home/pi/repo/scripts/install.sh -y"'
+```
+
+Run it as a non-root user via `sudo` (as above). Running the installer directly
+as root leaves `SUDO_USER=root` and it refuses, by design.
+
+Worth re-checking after installer edits: a second run preserves the SSID, PSK
+and `.env`; `/etc/dnsmasq.d` is never created; a bad SSID is rejected; and a
+run with no TTY fails with a message instead of hanging on `read`.
+
+## How a Camera Session Works
+
+This is the part that needs several files to see, so it is written out here.
+
+1. **Framing** (`arlo/socket.py`). Every frame is `L:<len> <json>`: the byte
+   length, a space, then the JSON body. `ArloSocket.read()` parses the length,
+   keeps calling `recv` until it has that many bytes, and returns a `Message`.
+2. **One thread per connection** (`ConnectionThread` in `server.py`). A camera
+   opens TCP 4000, sends a message, and the thread loops until the peer closes.
+3. **Every message is acked** with a `RESPONSE` carrying the same `ID`. A camera
+   that does not get its ack retries and eventually gives up on the base station.
+4. **Registration is the only moment configuration reaches the camera.** On
+   `registration` the server persists a `Camera` row and replies with a register
+   set (`REGISTER_SET_INITIAL`, or `REGISTER_SET_INITIAL_ULTRA` for the VMC5040).
+   Arming, motion zones, the WiFi country code and the video config all ride
+   along here. Editing a register set does nothing until the camera re-registers,
+   which in practice means a battery pull.
+5. **Motion** (`pirMotionAlert`): the ack is sent *immediately*, before anything
+   slow happens, then `motion_recorder.monitor_and_record` runs on its own
+   thread. It waits for the camera's RTSP server, records a fixed-length clip
+   with GStreamer, writes `arlo-<stamp>.mkv` plus a paired `gst-<stamp>.log`,
+   makes a thumbnail with ffmpeg, and fires the webhook / ntfy notification.
+6. **`arlo.db` (sqlite) is the shared state** between the socket server, the
+   Flask API and the viewer. There is no in-memory camera registry: a `Camera`
+   is loaded from the DB per request (`Camera.from_db_serial` / `from_db_ip`).
+   `serialnumber`, `ip`, `friendlyname` and `hostname` all carry UNIQUE indexes.
+7. **The viewer never talks to a camera.** It reads the recordings directory and
+   proxies camera calls to the Flask API on :5000.
+
+## Landmines
+
+Things that cost real time to rediscover:
+
+- **Deepcopy register sets before mutating them.** `Message(TEMPLATE)` does not
+  copy the nested dicts, so writing into one permanently mutates the
+  module-level template for every camera that registers afterwards.
+- **The camera only honours keys under `SetValues`.** A top-level copy of the
+  same key is silently ignored, which looks exactly like a camera that refuses
+  the setting.
+- **ffmpeg cannot open the Ultra's RTSP stream at all** (not a tuning problem).
+  Recording and live streaming are GStreamer; ffmpeg is only used to cut
+  thumbnails out of finished files.
+- **A TCP connect to :554 always succeeds** whether or not the camera is
+  streaming, so it is worthless as a readiness probe. Wait for actual data.
+- **Friendly names must be unique**, and two unregistered cameras collide on the
+  placeholder `'UNKNOWN'` IP because of `idx_camera_ip`.
+- **`RecordingBasePath` needs its trailing slash** - it is concatenated, not joined.
+- Known issues that are deliberately *not* fixed are listed in docs/ULTRA-FIXES.md.
+  Check there before chasing one.
+
 ## Key Components
 
 ### arlo-cam-api (Python)
@@ -151,6 +259,23 @@ Camera1  Camera2
 - 3003/TCP - Web viewer (Node.js)
 - 554/TCP - RTSP streaming
 - 67/UDP - DHCP (arlo-dhcp.service, private dnsmasq)
+
+## Environment Contract
+
+The units and the code agree on these; changing one side means changing both.
+
+| Variable | Set by | Read by | Purpose |
+|---|---|---|---|
+| `ARLO_LOG_FILE` | `arlo.service` | `helpers/safe_print.py` | Backend log path (default `/tmp/arlo-service.log`) |
+| `ARLO_AP_INTERFACE` | `arlo.service`, `arlo-pair`, `arlo-status` | `helpers/connectivity_checker.py` | Radio to ask for associated stations |
+| `RECORDINGS_DIR` | `.env` | `arlo-viewer/server.js` | Gallery + cleanup root |
+| `ARLO_CONFIG` | `.env` | `arlo-viewer/server.js` | Path to the backend `config.yaml` (aliases) |
+| `RETENTION_DAYS` | `.env` | `arlo-viewer/server.js` | Cleanup age for clips, thumbnails and `gst-*.log` |
+| `AUTH_PASSWORD`, `AUTH_SECRET` | `.env` | `arlo-viewer/server.js` | Viewer login and cookie signing |
+
+`WorkingDirectory` in `arlo.service` must be the app directory: `config.yaml`
+and `arlo.db` are opened by relative path, and `motion_recorder` reads its
+config at import time.
 
 ## Configuration
 
@@ -227,22 +352,18 @@ journalctl -u hostapd -u arlo-dhcp -n 50
 
 ## GStreamer Streaming
 
-The project uses GStreamer for live streaming because:
-- FFmpeg sends RTCP at 10-second intervals (hardcoded)
-- Arlo cameras require RTCP every 5 seconds
-- GStreamer correctly sends RTCP at 5-second intervals
+Everything video is GStreamer: ffmpeg's hardcoded 10-second RTCP interval is
+too slow for the cameras' 5-second requirement, and it cannot open the Ultra's
+stream at all. Full reasoning in docs/ULTRA-FIXES.md.
 
-Key streaming files:
-- `src/arlo-cam-api/helpers/stream_manager.py`
-- `src/arlo-cam-api/helpers/gst_hls_stream.py`
+- `src/arlo-cam-api/helpers/motion_recorder.py` - motion clips
+- `src/arlo-cam-api/helpers/stream_manager.py`, `helpers/gst_hls_stream.py` - live HLS
 
 ## Hardware Requirements
 
-- Linux computer (Raspberry Pi, old laptop, etc.)
-- Enterprise WiFi access point with proper power save support
-- Recommended: TP-Link Omada EAP225 or EAP245
-- NOT recommended: Consumer USB adapters (RTL8812AU) - drops sleeping cameras
-- USB Ethernet adapter (to connect to Omada AP)
+Any Linux host plus an AP-capable 2.4 GHz radio. The radio is the part that
+matters: consumer USB adapters (RTL8812AU) drop sleeping cameras. See
+docs/INSTALLATION.md and docs/DEPENDENCIES.md for tested hardware.
 
 ## Security Notes
 
