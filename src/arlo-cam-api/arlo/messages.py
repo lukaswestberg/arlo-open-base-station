@@ -717,15 +717,14 @@ REGISTER_SET_INITIAL_ULTRA = {
 # When SpotlightEnabled is false we invert that: no lamp, infrared instead,
 # greyscale night video.
 #
-# The IRLedState / IRCutState values are the unverified part. This codebase has
-# only ever seen "off" and "engaged", and the camera does not error on a value
-# it does not recognise, so a wrong guess shows up as black night footage
-# rather than a log line. Test in a dark room; if the image is black, try the
-# next rung:
-#   1. IRLedState "auto", IRCutState "auto"            <- current
-#   2. IRLedState "on",   IRCutState "disengaged"
-#   3. IRLedState "auto", IRCutState "disengaged"
-#   4. NightVisionMode False + IRLedState "on" + IRCutState "disengaged"
+# IRLedState / IRCutState "auto" are confirmed working on firmware
+# 58.0.15_0f53588 (VMC5040 H10): the camera acks the registerSet and night
+# recordings come back as infrared. The camera does not error on a value it
+# does not recognise, so if a future firmware regresses this it shows up as
+# black footage rather than a log line. Fallbacks, in order:
+#   1. IRLedState "on",   IRCutState "disengaged"
+#   2. IRLedState "auto", IRCutState "disengaged"
+#   3. NightVisionMode False + IRLedState "on" + IRCutState "disengaged"
 LIGHT_POLICY_SPOTLIGHT_OFF = {
         "SpotlightModeAlert": 0,           # no lamp on a motion alert
         "SpotlightIntensityAlert": 0,      # and no brightness if the mode flag is ignored

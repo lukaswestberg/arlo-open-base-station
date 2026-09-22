@@ -64,10 +64,6 @@ affect every camera model, not just the Ultra.
   is named `*Alert`, so they plausibly govern only what the lamp does on a
   motion alert, not the camera's own ambient-light behaviour. If the spotlight
   still lights, no register set will fix it and the fallback is physical.
-- The `IRLedState` / `IRCutState` values that *enable* infrared are unverified.
-  Only `"off"` and `"engaged"` have ever been observed; the camera does not
-  error on a value it does not recognise, so a wrong guess shows up as black
-  night footage. `arlo/messages.py` carries a ladder of candidates to try.
 - `camera.py` builds `Message(arlo.messages.REGISTER_SET)` without `deepcopy`
   in `pir_led`, `arm`, `mic_request` and `speaker_request`, then assigns
   `SetValues`, permanently mutating the module-level template for the life of
@@ -93,6 +89,10 @@ affect every camera model, not just the Ultra.
   600. Trigger count: 0 (thr:2), bitmask: 0x2, force: 0`. It also logs
   `(non manual mode), updating lights`, so the firmware distinguishes a manual
   light mode from automatic and defaults to automatic.
+- `IRLedState: "auto"` and `IRCutState: "auto"` are accepted and produce
+  infrared night video (confirmed 2026-09-22 on 58.0.15_0f53588). The camera
+  does not error on values it does not recognise, so a regression here would
+  appear as black footage, not a log line.
 - The registration `Capabilities` list advertises `IRLED`, `IRCutFilter` and
   `NightVision`, but no spotlight capability, even though the firmware clearly
   drives one.
