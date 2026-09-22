@@ -42,3 +42,10 @@ CameraAliases:
 BatteryWarningEnabled: true
 BatteryWarningLow: 25       # Send warning when battery drops below this percentage (priority: high)
 BatteryWarningCritical: 10  # Send critical warning when battery drops below this percentage (priority: urgent)
+
+# Spotlight (Arlo Ultra / VMC5040 only)
+# false = the white spotlight never illuminates. Infrared is enabled instead,
+# so night video is black-and-white rather than colour. Cameras without a
+# spotlight ignore this. Only applied when a camera registers, which happens
+# on its own every few hours; a ~2 s battery pull forces it sooner.
+SpotlightEnabled: false

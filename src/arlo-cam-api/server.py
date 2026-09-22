@@ -72,6 +72,9 @@ AUDIO_RECORDING_TIMEOUT=config['AudioRecordingTimeout']
 RECORDING_BASE_PATH=config['RecordingBasePath']
 RECORD_ON_MOTION_ALERT=config['RecordOnMotionAlert']
 RECORD_ON_AUDIO_ALERT=config['RecordOnAudioAlert']
+# .get(), not config[...]: install.sh only writes config.yaml when it is absent,
+# so an upgraded deployment will not have this key. Missing means spotlight off.
+SPOTLIGHT_ENABLED=bool(config.get('SpotlightEnabled', False))
 
 def generate_thumbnail(video_filename):
     """Generate thumbnail from video file using ffmpeg"""
@@ -251,6 +254,14 @@ class ConnectionThread(threading.Thread):
                     registerSet['WifiCountryCode'] = WIFI_COUNTRY_CODE
                     registerSet['SetValues']['WifiCountryCode'] = WIFI_COUNTRY_CODE
 
+                    # Spotlight policy. Only touches keys the chosen template
+                    # already has, so non-Ultra cameras are unaffected.
+                    applied, skipped = arlo.messages.apply_light_policy(
+                        registerSet, SPOTLIGHT_ENABLED)
+                    s_print(f"[SPOTLIGHT] {msg['SystemSerialNumber']} "
+                            f"spotlight={'on' if SPOTLIGHT_ENABLED else 'off'} "
+                            f"applied={applied} skipped={skipped}")
+
                     # Apply current armed state to registration message
                     if camera.armed == 0:
                         # These live inside SetValues; top-level copies are ignored.
@@ -259,6 +270,10 @@ class ConnectionThread(threading.Thread):
                         registerSet['SetValues']['AudioTargetState'] = "Disarmed"
                     # else: keep REGISTER_SET_INITIAL defaults (Armed, VME enabled, Audio disarmed)
 
+                    # send_message logs only the message type, so log the frame
+                    # itself: it is the only proof of what reached the camera.
+                    s_print(f"[REGISTERSET] {self.ip} {msg['SystemSerialNumber']} "
+                            f"{json.dumps(registerSet.dictionary, separators=(',', ':'))}")
                     camera.send_message(registerSet)
                 elif (msg['Type'] == "status"):
                     s_print(f"<[{self.ip}][{msg['ID']}] Status from {msg['SystemSerialNumber']}")

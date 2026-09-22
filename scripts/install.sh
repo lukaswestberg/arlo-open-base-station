@@ -270,6 +270,10 @@ CameraAliases: {}
 BatteryWarningEnabled: true
 BatteryWarningLow: 25
 BatteryWarningCritical: 10
+
+# false = the Ultra's white spotlight never lights; night video is IR
+# black-and-white instead. Applied when a camera next registers.
+SpotlightEnabled: false
 EOF
     chown "$ARLO_USER:$ARLO_GROUP" "$APP_DIR/config.yaml"
 else

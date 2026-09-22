@@ -708,6 +708,71 @@ REGISTER_SET_INITIAL_ULTRA = {
         }
 }
 
+# ---------------------------------------------------------------------------
+# Light policy
+#
+# The Ultra ships with infrared switched off entirely (NightVisionMode False,
+# IRLedState "off", IRCutState "engaged") while NightModeLightSourceAlert is 1,
+# which leaves the white spotlight as the camera's only way to see in the dark.
+# When SpotlightEnabled is false we invert that: no lamp, infrared instead,
+# greyscale night video.
+#
+# The IRLedState / IRCutState values are the unverified part. This codebase has
+# only ever seen "off" and "engaged", and the camera does not error on a value
+# it does not recognise, so a wrong guess shows up as black night footage
+# rather than a log line. Test in a dark room; if the image is black, try the
+# next rung:
+#   1. IRLedState "auto", IRCutState "auto"            <- current
+#   2. IRLedState "on",   IRCutState "disengaged"
+#   3. IRLedState "auto", IRCutState "disengaged"
+#   4. NightVisionMode False + IRLedState "on" + IRCutState "disengaged"
+LIGHT_POLICY_SPOTLIGHT_OFF = {
+        "SpotlightModeAlert": 0,           # no lamp on a motion alert
+        "SpotlightIntensityAlert": 0,      # and no brightness if the mode flag is ignored
+        "NightModeLightSourceAlert": 0,    # illuminate with IR, not the lamp
+        "NightVisionMode": True,
+        "IRLedState": "auto",
+        "IRCutState": "auto",
+        "NightModeGrey": 1,                # IR night video is greyscale
+        }
+
+# Written last, after everything else, so no other value can raise the lamp.
+LIGHT_POLICY_LOCKED = {
+        "SpotlightModeAlert": 0,
+        "SpotlightIntensityAlert": 0,
+        "NightModeLightSourceAlert": 0,
+        }
+
+
+def apply_light_policy(register_set, spotlight_enabled):
+    """Apply the spotlight policy to a register set, in place.
+
+    Only keys already present in the template's SetValues are written: the
+    Ultra set carries all seven, the others carry only NightVisionMode (already
+    True, so a no-op). Injecting keys a camera does not know risks it rejecting
+    the whole registerSet and staying unarmed.
+
+    Returns (applied, skipped) where applied is {key: value} actually written.
+    """
+    if spotlight_enabled:
+        # Leave the template alone: "on" is exactly the shipped behaviour.
+        return {}, []
+
+    values = register_set['SetValues']
+    applied = {}
+    skipped = []
+    for key, value in LIGHT_POLICY_SPOTLIGHT_OFF.items():
+        if key in values:
+            values[key] = value
+            applied[key] = value
+        else:
+            skipped.append(key)
+    for key, value in LIGHT_POLICY_LOCKED.items():
+        if key in values:
+            values[key] = value
+    return applied, skipped
+
+
 REGISTER_SET_INITIAL_SUBSCRIPTION = {
         "Type":"registerSet",
         "ID":-1,
