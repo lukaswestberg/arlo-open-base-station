@@ -31,6 +31,15 @@ RTSP_LATENCY_MS = int(_config.get('MotionRtspLatencyMs', 200))
 # stopped at 47 s) and delivers fewer frames. Over TCP it streamed past 75 s.
 RTSP_PROTOCOLS = str(_config.get('MotionRtspProtocols', 'tcp'))
 
+# Between motion events the camera tears its network stack down, and a PIR
+# alert can land before its RTSP server answers again. gst-launch then dies at
+# the connect step ("Failed to connect", before OPTIONS is ever sent) within a
+# second, so a retry is cheap. It is a retry and not a readiness probe: a TCP
+# connect to 554 always succeeds, and a DESCRIBE probe was unreliable and used
+# up the camera's only session.
+CONNECT_ATTEMPTS = max(1, int(_config.get('MotionRtspConnectAttempts', 3)))
+CONNECT_RETRY_SECONDS = 2
+
 # The camera serves exactly one RTSP session. A second gst-launch started while
 # a recording is live dies at the SDP with "Failed to connect", so overlapping
 # motion alerts must not race each other for the stream.
@@ -97,6 +106,54 @@ def _make_thumbnail(filename, thumbnail_filename):
     return False
 
 
+def _log_says(logfile, offset, needle):
+    """True if needle appears in logfile past offset (this attempt's output)."""
+    try:
+        with open(logfile) as fh:
+            fh.seek(offset)
+            return needle in fh.read()
+    except OSError:
+        return False
+
+
+def _run_gst(ip, cmd, logfile, attempt):
+    """Run one gst-launch for at most CLIP_SECONDS, appending to logfile.
+
+    Returns False only if the process could not be started at all.
+    """
+    log = open(logfile, 'w' if attempt == 1 else 'a')
+    if attempt > 1:
+        log.write('\n--- attempt ' + str(attempt) + ' ---\n')
+        log.flush()
+    try:
+        proc = subprocess.Popen(cmd, stdout=log, stderr=log)
+    except Exception as exc:
+        log.close()
+        s_print('[' + ip + '] could not start gst-launch: ' + str(exc))
+        return False
+
+    # The camera usually ends the stream before CLIP_SECONDS is up, and -e has
+    # already finalised the container by then. Poll rather than sleeping the
+    # full clip length, so the next motion alert is not locked out of a stream
+    # that is no longer being used. It also makes a refused connect return in
+    # about a second, which is what keeps the retry cheap.
+    deadline = time.monotonic() + CLIP_SECONDS
+    while time.monotonic() < deadline and proc.poll() is None:
+        time.sleep(0.5)
+    # -e turns SIGINT into an EOS, which finalises the container.
+    if proc.poll() is None:
+        proc.send_signal(signal.SIGINT)
+    try:
+        proc.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        s_print('[' + ip + '] gst-launch would not stop, killing')
+        proc.kill()
+        proc.wait()
+    finally:
+        log.close()
+    return True
+
+
 def monitor_and_record(ip, rtsp_url, filename, serial_number, zones,
                        webhook_manager, friendly_name, hostname):
     """Record one motion clip, unless this camera is already recording."""
@@ -130,44 +187,24 @@ def _record(ip, filename, serial_number, zones, webhook_manager,
     s_print('[' + ip + '] gst recording ' + str(CLIP_SECONDS) + 's from port '
             + str(RTSP_PORT) + ' over ' + RTSP_PROTOCOLS)
 
-    log = open(logfile, 'w')
-    try:
-        proc = subprocess.Popen(cmd, stdout=log, stderr=log)
-    except Exception as exc:
-        log.close()
-        s_print('[' + ip + '] could not start gst-launch: ' + str(exc))
-        return
-
-    # The camera usually ends the stream before CLIP_SECONDS is up, and -e has
-    # already finalised the container by then. Poll rather than sleeping the
-    # full clip length, so the next motion alert is not locked out of a stream
-    # that is no longer being used.
-    deadline = time.monotonic() + CLIP_SECONDS
-    while time.monotonic() < deadline and proc.poll() is None:
-        time.sleep(0.5)
-    # -e turns SIGINT into an EOS, which finalises the container.
-    if proc.poll() is None:
-        proc.send_signal(signal.SIGINT)
-    try:
-        proc.wait(timeout=10)
-    except subprocess.TimeoutExpired:
-        s_print('[' + ip + '] gst-launch would not stop, killing')
-        proc.kill()
-        proc.wait()
-    finally:
-        log.close()
-
-    if not os.path.exists(ts_filename) or os.path.getsize(ts_filename) < 10000:
+    for attempt in range(1, CONNECT_ATTEMPTS + 1):
+        log_offset = os.path.getsize(logfile) if attempt > 1 else 0
+        if not _run_gst(ip, cmd, logfile, attempt):
+            return
         size = os.path.getsize(ts_filename) if os.path.exists(ts_filename) else 0
-        reason = ''
-        try:
-            with open(logfile) as fh:
-                if 'Failed to connect' in fh.read():
-                    reason = ' - camera refused the RTSP connection'
-        except OSError:
-            pass
-        s_print('[' + ip + '] recording failed, ' + str(size) + ' bytes'
-                + reason + ', see ' + logfile)
+        if size >= 10000:
+            break
+        refused = _log_says(logfile, log_offset, 'Failed to connect')
+        if refused and attempt < CONNECT_ATTEMPTS:
+            s_print('[' + ip + '] RTSP not answering yet, retry '
+                    + str(attempt) + '/' + str(CONNECT_ATTEMPTS - 1)
+                    + ' in ' + str(CONNECT_RETRY_SECONDS) + 's')
+            time.sleep(CONNECT_RETRY_SECONDS)
+            continue
+        reason = ' - camera refused the RTSP connection' if refused else ''
+        s_print('[' + ip + '] recording failed after ' + str(attempt)
+                + ' attempt(s), ' + str(size) + ' bytes' + reason
+                + ', see ' + logfile)
         if os.path.exists(ts_filename):
             os.remove(ts_filename)
         return

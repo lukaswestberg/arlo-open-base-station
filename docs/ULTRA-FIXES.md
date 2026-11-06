@@ -81,6 +81,17 @@ affect every camera model, not just the Ultra.
     `-e` has already finalised the container by then, but the thread kept
     sleeping - holding the camera's slot long after the stream was gone. It now
     polls for the process exiting.
+17. **A motion alert could reach a camera whose RTSP server was not up yet.**
+    Between events the camera tears its network stack down (`nm_shutdown`,
+    `enter sleep mode success` in its own log), and an alert landing mid-cycle
+    found nothing listening: `gst_rtspsrc_retrieve_sdp` failed with
+    `Failed to connect. (Generic error)` before OPTIONS, within a second. With
+    one attempt per alert, five recordings in one day were lost this way,
+    each with the per-serial guard free and each followed by a working
+    recording minutes later. The recorder now retries a
+    refused connect (`MotionRtspConnectAttempts`, default 3, 2 s apart). It is
+    a retry and not a probe, because neither a TCP connect nor a DESCRIBE tells
+    you whether the stream is ready.
 
 ## Known, not fixed
 
@@ -114,6 +125,15 @@ affect every camera model, not just the Ultra.
   `motionTimeoutAlert` at 16 s.
 - The camera switches between 24 and 15 fps mid-stream, re-sending SPS/PPS.
   Any container written live must tolerate that.
+- TEARDOWN is usually not acknowledged. Most successful runs end with
+  `Could not send message. (Received end-of-file)` or `(Parse error)` in
+  `gst_rtspsrc_close`. The clip is already finalised by then, so this is
+  cosmetic, not a failed recording.
+- A motion alert that arrives while the camera is already recording is
+  skipped, not queued: the camera has one session. The motion is on the clip
+  in progress, and that clip fires the notification.
+- A recording that fails outright (all connect attempts refused) sends no
+  notification, so that motion event goes unreported.
 
 ## Camera facts (VMC5040, HW H10, FW 58.0.15)
 

@@ -13,6 +13,9 @@ MotionRtspLatencyMs: 200
 # tcp or udp. Over UDP the camera ends the session early and delivers fewer
 # frames; over TCP it kept streaming past 75 s. Only change this to debug.
 MotionRtspProtocols: "tcp"
+# The camera can still be waking when a motion alert arrives, and gst then fails
+# to connect within a second. Refused connects are retried this many times.
+MotionRtspConnectAttempts: 3
 
 # Webhooks: leave blank to disable
 MotionRecordingWebHookUrl: ""
